@@ -1,0 +1,15 @@
+node_modules/
+dist/
+coverage/
+*.log
+.env
+.env.*
+!.env.example
+# Pastas de dados locais (não confundir com src/storage, que é código).
+/storage/
+/apps/server/storage/
+/backups/
+.DS_Store
+Thumbs.db
+apps/web/src/styles/tokens.css
+*.bundle

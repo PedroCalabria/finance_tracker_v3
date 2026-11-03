@@ -1,0 +1,27 @@
+{
+  "name": "financas-da-familia",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Dashboard financeiro familiar: despesas, entradas, parcelas, faturas e lembretes por email.",
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "npm run tokens && concurrently -n api,worker,web -c cyan,magenta,green \"npm run dev -w @ff/server\" \"npm run dev:worker -w @ff/server\" \"npm run dev -w @ff/web\"",
+    "tokens": "node scripts/build-tokens.mjs",
+    "build": "npm run tokens && npm run build -w @ff/web && npm run build -w @ff/server",
+    "db:generate": "npm run db:generate -w @ff/server",
+    "db:migrate": "npm run db:migrate -w @ff/server",
+    "test": "npm run test -w @ff/shared && npm run test -w @ff/server",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "lint": "npm run typecheck"
+  },
+  "devDependencies": {
+    "concurrently": "9.2.5"
+  }
+}

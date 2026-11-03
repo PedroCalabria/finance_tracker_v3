@@ -1,0 +1,7 @@
+{
+  "name": "@ff/design-system",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Tokens e componentes CSS do design system Finanças da Família (fonte: artifact Design System).",
+  "files": ["tokens.json", "components.css", "README.md"]
+}

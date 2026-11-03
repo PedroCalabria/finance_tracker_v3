@@ -1,0 +1,117 @@
+/* Layout da aplicação sobre o design system (components.css). Só usa tokens. */
+
+*, *::before, *::after { box-sizing: border-box; }
+html, body, #root { min-height: 100%; }
+body { margin: 0; font-family: var(--font-sans); font-size: 16px; line-height: 24px; color: var(--ink); background: var(--bg); -webkit-font-smoothing: antialiased; }
+h1, h2, h3, p { margin: 0; }
+button, input, select, textarea { font: inherit; color: inherit; }
+a { color: var(--primary-ink); }
+.app-m0 { margin: 0; }
+.app-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.ff-notice--danger { background: var(--danger-bg); color: var(--danger-ink); }
+.ff-select { appearance: auto; }
+textarea.ff-input { min-height: 88px; padding-top: var(--space-2); padding-bottom: var(--space-2); resize: vertical; }
+.ff-tab[aria-checked="true"] { background: var(--primary); color: var(--on-primary); }
+.ff-chip { white-space: nowrap; flex: none; }
+.ff-occ__foot { flex-wrap: wrap; }
+.ff-btn, .ff-icon-btn, .ff-tab, .ff-chip, .ff-nav__item { transition: background-color 120ms ease, color 120ms ease; }
+
+/* ---------- Estrutura: barra lateral + conteúdo */
+.app-shell { display: flex; min-height: 100vh; }
+.app-shell .ff-sidebar { position: sticky; top: 0; height: 100vh; flex: none; }
+.app-main { flex: 1; min-width: 0; }
+.app-content { max-width: var(--content-max); margin: 0 auto; padding: var(--space-6); display: flex; flex-direction: column; gap: var(--space-5); }
+.app-user { display: flex; flex-direction: column; padding: var(--space-3) var(--space-3) 0; margin-top: var(--space-2); border-top: 1px solid var(--border); }
+.app-user strong { font-size: 14px; line-height: 20px; }
+.app-user span { font-size: 13px; line-height: 18px; color: var(--ink-muted); overflow: hidden; text-overflow: ellipsis; }
+
+/* ---------- Cabeçalho da página do mês */
+.app-pagehead { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); flex-wrap: wrap; }
+.app-pagehead__title { font-size: 24px; line-height: 32px; font-weight: 700; }
+.app-toolbar { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); flex-wrap: wrap; }
+.app-toolbar__left { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; }
+.app-section-title { font-size: 18px; line-height: 26px; font-weight: 600; }
+
+/* ---------- Tabela: ajustes de uso real (ADR-0009)
+   Colunas da especificação em telas largas; em notebooks, Método aparece embaixo
+   do Banco e Observação embaixo do Serviço, para nada ficar escondido à direita. */
+.app-occ-table { container-type: inline-size; }
+.app-occ-table .ff-table th, .app-occ-table .ff-table td { padding-left: var(--space-3); padding-right: var(--space-3); }
+.app-occ-table .app-col-toggle { width: 48px; padding-left: var(--space-2); padding-right: 0; }
+.app-occ-table .app-wrap { white-space: normal; min-width: 90px; }
+.app-method-inline, .app-note-inline { display: none; font-size: 13px; line-height: 18px; font-weight: 500; color: var(--ink-muted); white-space: normal; }
+.app-note-inline { max-width: 260px; }
+@container (max-width: 1279px) {
+  .app-occ-table .app-col-method, .app-occ-table .app-col-note { display: none; }
+  .app-method-inline, .app-note-inline { display: block; }
+}
+.ff-table td.is-service { white-space: normal; min-width: 170px; }
+.ff-table td.is-note { max-width: 220px; }
+.app-cell-service { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.app-linklike { all: unset; cursor: pointer; font-weight: 600; color: var(--ink); border-radius: 4px; }
+.app-linklike:hover { text-decoration: underline; }
+.app-linklike:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.app-paycell { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+.app-attach { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; line-height: 18px; color: var(--primary-ink); text-decoration: none; }
+.app-attach svg { width: 14px; height: 14px; }
+.ff-table td.is-note { white-space: normal; }
+.ff-table tr.is-projected > td { color: var(--ink-muted); }
+.app-projected-tag { font-size: 12px; line-height: 16px; font-weight: 600; color: var(--ink-muted); }
+
+/* ---------- Faturas no celular: ação e selo em linha própria */
+@media (max-width: 767px) {
+  .ff-invoice > .ff-badge, .ff-invoice > .ff-btn { grid-column: 2 / -1; justify-self: start; }
+}
+
+/* ---------- Modal: sobreposição; no celular, sobe da base da tela */
+.app-overlay { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: var(--space-4); background: rgba(10, 20, 22, 0.45); overflow-y: auto; }
+.app-overlay .ff-dialog { max-height: calc(100vh - 32px); overflow-y: auto; }
+.app-dialog--wide { width: min(640px, 100%); }
+.app-grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-4); }
+.app-checkbox { display: flex; align-items: center; gap: var(--space-2); font-weight: 500; min-height: var(--control-h); }
+.app-checkbox input { width: 20px; height: 20px; accent-color: var(--primary); }
+.app-files { display: flex; flex-wrap: wrap; gap: var(--space-2); margin: 0; padding: 0; list-style: none; }
+.app-files li { display: inline-flex; align-items: center; gap: var(--space-1); padding: 4px 4px 4px 10px; border: 1px solid var(--border); border-radius: var(--radius-full); font-size: 13px; }
+.ff-upload { position: relative; cursor: pointer; }
+.ff-upload:focus-within { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.app-kv { display: grid; grid-template-columns: auto 1fr; gap: var(--space-1) var(--space-4); margin: 0; font-size: 15px; }
+.app-kv dt { color: var(--ink-muted); }
+.app-kv dd { margin: 0; font-weight: 600; font-variant-numeric: tabular-nums; }
+.app-actions-row { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+
+@media (max-width: 767px) {
+  .app-shell { display: block; }
+  .app-content { padding: var(--space-4) var(--space-4) 96px; gap: var(--space-4); }
+  .app-overlay { place-items: end stretch; padding: 0; }
+  .app-overlay .ff-dialog { width: 100%; max-height: 92vh; }
+  .app-grid2 { grid-template-columns: 1fr; }
+  .app-pagehead__title { font-size: 20px; line-height: 28px; }
+  .app-toolbar__left { overflow-x: auto; flex-wrap: nowrap; padding-bottom: 2px; }
+}
+
+/* ---------- Menu no celular */
+.app-drawer { position: fixed; inset: 0; z-index: 40; background: rgba(10, 20, 22, 0.45); }
+.app-drawer .ff-sidebar { height: 100%; width: min(300px, 85vw); box-shadow: var(--shadow-modal); }
+
+/* ---------- Toasts, carregamento, vazio */
+.app-toasts { position: fixed; left: 50%; bottom: var(--space-5); transform: translateX(-50%); z-index: 60; display: flex; flex-direction: column; gap: var(--space-2); }
+.app-toast { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-3) var(--space-4); border-radius: var(--radius-md); background: var(--ink); color: var(--surface); font-weight: 600; box-shadow: var(--shadow-modal); }
+.app-toast svg { width: 18px; height: 18px; }
+.app-loading { padding: var(--space-6); text-align: center; color: var(--ink-muted); }
+.app-empty { display: flex; flex-direction: column; align-items: center; gap: var(--space-3); padding: var(--space-7) var(--space-5); text-align: center; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); }
+.app-empty__title { font-size: 18px; line-height: 26px; font-weight: 600; }
+
+/* ---------- Telas de entrada (login etc.) */
+.app-auth { min-height: 100vh; display: grid; place-items: center; padding: var(--space-4); }
+.app-auth__card { width: min(440px, 100%); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--shadow-card); padding: var(--space-6); display: flex; flex-direction: column; gap: var(--space-4); }
+.app-auth__brand { font-size: 18px; line-height: 26px; font-weight: 700; }
+.app-auth__title { font-size: 24px; line-height: 32px; font-weight: 700; }
+.app-auth__links { display: flex; justify-content: space-between; gap: var(--space-3); flex-wrap: wrap; font-size: 15px; }
+.app-form { display: flex; flex-direction: column; gap: var(--space-4); }
+
+/* ---------- Páginas de cadastro */
+.app-list-row { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3) var(--space-5); border-top: 1px solid var(--border); }
+.app-list-row__main { flex: 1; min-width: 0; }
+.app-list-row__main p { margin: 0; }
+.app-inline-form { display: flex; gap: var(--space-3); align-items: flex-end; flex-wrap: wrap; padding: var(--space-4) var(--space-5); border-top: 1px solid var(--border); }
+.app-inline-form .ff-field { flex: 1 1 200px; }

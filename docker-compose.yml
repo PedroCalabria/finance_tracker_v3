@@ -1,0 +1,58 @@
+# Produção na VPS (ADR-0008). O CloudPanel faz o proxy HTTPS para 127.0.0.1:${APP_PORT}.
+# Desenvolvimento: `docker compose up -d db` sobe só o Postgres.
+name: financas
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: financas
+      POSTGRES_USER: financas
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-financas}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # Só na própria máquina: o banco nunca fica exposto na internet.
+    ports:
+      - "127.0.0.1:${DB_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U financas -d financas"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    mem_limit: 512m
+
+  app:
+    build: .
+    image: financas-app:latest
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://financas:${POSTGRES_PASSWORD:-financas}@db:5432/financas
+      TRUST_PROXY: "true"
+      COOKIE_SECURE: "true"
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${APP_PORT:-3000}:3000"
+    mem_limit: 512m
+
+  worker:
+    image: financas-app:latest
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://financas:${POSTGRES_PASSWORD:-financas}@db:5432/financas
+    command: ["node", "apps/server/dist/main-worker.js"]
+    depends_on:
+      db:
+        condition: service_healthy
+      app:
+        condition: service_started
+    healthcheck:
+      disable: true
+    mem_limit: 384m
+
+volumes:
+  pgdata:

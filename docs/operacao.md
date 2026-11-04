@@ -9,7 +9,7 @@ Decisões em [ADR-0008](decisions/0008-infraestrutura-e-operacao.md).
 4. **Chaves (guardar no gerenciador de senhas antes de usar):**
    - `JWT_SECRET`: `node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"`
    - `ATTACHMENTS_KEY`: `node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"` — **perdê-la = perder os comprovantes**.
-   - Backup: `age-keygen -o financas-backup.key` **no seu computador**. A linha "public key" vai para `BACKUP_AGE_RECIPIENT`; o arquivo `.key` **não vai para a VPS**.
+   - Backup: `age-keygen -o financas-backup.key` **no seu computador**, fora da pasta do projeto. A linha "public key" vai para `BACKUP_AGE_RECIPIENT`; o arquivo `.key` **não vai para a VPS**. No Windows, instale antes com `winget install FiloSottile.age` e abra um terminal novo; no macOS, `brew install age`. Guarde o conteúdo do `.key` no gerenciador de senhas: sem ele, os backups não podem ser restaurados.
 
 ## 2. Deploy na VPS
 ```bash

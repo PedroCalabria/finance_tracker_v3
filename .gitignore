@@ -13,3 +13,5 @@ coverage/
 Thumbs.db
 apps/web/src/styles/tokens.css
 *.bundle
+# Chave privada do backup (age): nunca no repositório.
+*.key

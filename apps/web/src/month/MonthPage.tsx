@@ -61,7 +61,13 @@ export function MonthPage({ walletId }: { walletId: string }) {
           <p className="ff-caption app-m0">Visão do mês</p>
           <h1 className="app-pagehead__title">{formatMonthLong(month)}</h1>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+        {/* O atalho fica à esquerda: aparecendo ou não, o seletor de mês não sai do lugar. */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+          {month !== current && (
+            <Button variant="ghost" size="sm" onClick={() => setParam('mes', null)}>
+              Voltar para o mês atual
+            </Button>
+          )}
           <div className="ff-month" role="group" aria-label="Mês exibido">
             <IconButton icon="left" label="Mês anterior" disabled={!canPrev} onClick={() => setParam('mes', addMonths(month, -1))} />
             <span className="ff-month__label" aria-live="polite">
@@ -69,11 +75,6 @@ export function MonthPage({ walletId }: { walletId: string }) {
             </span>
             <IconButton icon="right" label="Próximo mês" disabled={!canNext} onClick={() => setParam('mes', addMonths(month, 1))} />
           </div>
-          {month !== current && (
-            <Button variant="ghost" size="sm" onClick={() => setParam('mes', null)}>
-              Voltar para o mês atual
-            </Button>
-          )}
         </div>
       </div>
 

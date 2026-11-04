@@ -231,32 +231,46 @@ export async function updateOccurrence(db: DB, walletId: string, id: string, inp
     const item = (await tx.query.items.findFirst({ where: eq(items.id, occ.itemId) }))!;
     if (occ.invoiceId && input.dueDate !== undefined) throw badRequest('No crédito, a data vem do vencimento da fatura.');
     if (item.systemKind && input.expectedCents !== undefined) throw badRequest('Esse valor é calculado pela fatura.');
-    const patch: Partial<OccRec> = {};
-    if (input.expectedCents !== undefined) patch.expectedCents = input.expectedCents;
-    if (input.dueDate !== undefined) patch.dueDate = input.dueDate;
-    if (input.note !== undefined) patch.note = input.note || null;
-    await tx
-      .update(occurrences)
-      .set({ ...patch, version: sql`${occurrences.version} + 1` })
-      .where(eq(occurrences.id, occ.id));
-    if (input.expectedCents !== undefined && item.form === 'recurring') {
-      await tx.update(items).set({ amountCents: input.expectedCents, version: sql`${items.version} + 1` }).where(eq(items.id, item.id));
-      // Meses seguintes já gravados e sem pagamento acompanham o novo valor.
-      await tx
-        .update(occurrences)
-        .set({ expectedCents: input.expectedCents })
-        .where(
-          and(
-            eq(occurrences.itemId, item.id),
-            sql`${occurrences.competenceMonth} > ${occ.competenceMonth}`,
-            eq(occurrences.status, 'pending'),
-            sql`not exists (select 1 from payments p where p.occurrence_id = ${occurrences.id})`,
-          ),
-        );
-    }
-    if (occ.status !== 'canceled' && !occ.invoiceId && input.expectedCents !== undefined) await refreshStatus(tx, occ.id);
+    await patchOccurrence(tx, occ, item, input);
     return getRow(tx, walletId, occ.id, clock);
   });
+}
+
+/**
+ * Grava valor previsto, data e observação de uma ocorrência já validada. Numa
+ * recorrente, o valor novo vira a regra e os meses seguintes em aberto acompanham.
+ */
+export async function patchOccurrence(
+  tx: Tx,
+  occ: OccRec,
+  item: ItemRec,
+  input: { expectedCents?: number; dueDate?: string | null; note?: string | null; competenceMonth?: Month },
+): Promise<void> {
+  const patch: Partial<OccRec> = {};
+  if (input.expectedCents !== undefined) patch.expectedCents = input.expectedCents;
+  if (input.dueDate !== undefined) patch.dueDate = input.dueDate;
+  if (input.note !== undefined) patch.note = input.note || null;
+  if (input.competenceMonth !== undefined) patch.competenceMonth = input.competenceMonth;
+  await tx
+    .update(occurrences)
+    .set({ ...patch, version: sql`${occurrences.version} + 1` })
+    .where(eq(occurrences.id, occ.id));
+  if (input.expectedCents !== undefined && item.form === 'recurring') {
+    await tx.update(items).set({ amountCents: input.expectedCents, version: sql`${items.version} + 1` }).where(eq(items.id, item.id));
+    // Meses seguintes já gravados e sem pagamento acompanham o novo valor.
+    await tx
+      .update(occurrences)
+      .set({ expectedCents: input.expectedCents })
+      .where(
+        and(
+          eq(occurrences.itemId, item.id),
+          sql`${occurrences.competenceMonth} > ${occ.competenceMonth}`,
+          eq(occurrences.status, 'pending'),
+          sql`not exists (select 1 from payments p where p.occurrence_id = ${occurrences.id})`,
+        ),
+      );
+  }
+  if (occ.status !== 'canceled' && !occ.invoiceId && input.expectedCents !== undefined) await refreshStatus(tx, occ.id);
 }
 
 /** Recalcula o status gravado a partir dos pagamentos (fora do crédito). */

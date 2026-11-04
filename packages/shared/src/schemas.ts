@@ -75,6 +75,37 @@ export const itemUpdateInput = z.object({
   fromMonth: month.optional(),
 });
 
+/**
+ * Edição completa a partir de uma linha da tabela (ADR-0004). Os campos têm o
+ * sentido do cadastro, exceto os "deste mês": `dueDate`, `note` e
+ * `occurrenceCents` valem para a ocorrência `occurrenceId`.
+ */
+export const itemEditInput = z
+  .object({
+    /** Linha aberta pela pessoa (pode ser projeção "p_<itemId>_<mês>"). */
+    occurrenceId: z.string().min(1).max(80),
+    type: z.enum(ITEM_TYPES),
+    form: z.enum(ITEM_FORMS),
+    description: z.string().trim().min(1, 'Informe o serviço.').max(120),
+    categoryId: uuid.nullish(),
+    method: z.enum(METHODS),
+    accountId: uuid.nullish(),
+    /** Única: valor. Recorrente: valor deste mês em diante. Parcelada: valor TOTAL. */
+    amountCents: positiveCents,
+    installments: z.number().int().min(2).max(120).nullish(),
+    /** Parcelada: valor desta parcela (ignorado se o total ou o número de parcelas mudar). */
+    occurrenceCents: positiveCents.optional(),
+    variableAmount: z.boolean().optional(),
+    date: isoDate,
+    /** Data p/ pagamento DESTE mês. Ignorada no crédito. */
+    dueDate: isoDate.nullish(),
+    note: z.string().trim().max(500).nullish(),
+    version: z.number().int().optional(),
+  })
+  .refine((i) => i.form !== 'installment' || (i.installments ?? 0) >= 2, { message: 'Informe o número de parcelas.', path: ['installments'] })
+  .refine((i) => i.method !== 'credit' || i.type === 'expense', { message: 'Crédito só vale para despesas.', path: ['method'] })
+  .refine((i) => i.method !== 'credit' || !!i.accountId, { message: 'Escolha o cartão.', path: ['accountId'] });
+
 export const itemEndInput = z.object({ lastMonth: month });
 
 export const occurrenceUpdateInput = z.object({
@@ -126,6 +157,7 @@ export type CategoryInput = z.infer<typeof categoryInput>;
 export type AccountInput = z.infer<typeof accountInput>;
 export type ItemCreateInput = z.infer<typeof itemCreateInput>;
 export type ItemUpdateInput = z.infer<typeof itemUpdateInput>;
+export type ItemEditInput = z.infer<typeof itemEditInput>;
 export type OccurrenceUpdateInput = z.infer<typeof occurrenceUpdateInput>;
 export type PaymentInput = z.infer<typeof paymentInput>;
 export type InvoicePaymentInput = z.infer<typeof invoicePaymentInput>;

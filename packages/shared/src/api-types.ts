@@ -89,6 +89,10 @@ export interface ItemDetail {
   amountCents: number | null;
   variableAmount: boolean;
   dueDay: number | null;
+  /** "Data" do cadastro (compra ou lançamento). */
+  entryDate: ISODate;
+  categoryId: string | null;
+  accountId: string | null;
   startMonth: Month;
   endMonth: Month | null;
   occurrences: OccurrenceRow[];

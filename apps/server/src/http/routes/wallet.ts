@@ -10,6 +10,7 @@ import {
   isoDate,
   itemCreateInput,
   itemEndInput,
+  itemEditInput,
   itemUpdateInput,
   month,
   moveInvoiceInput,
@@ -77,6 +78,7 @@ export async function walletRoutes(app: FastifyInstance, ctx: AppContext): Promi
     );
     r.get<P<'id'>>(`${W}/items/:id`, async (req) => itemsSvc.getItemDetail(ctx.db, req.walletId, req.params.id, await clock(req)));
     r.patch<P<'id'>>(`${W}/items/:id`, async (req) => itemsSvc.updateItem(ctx.db, req.walletId, req.params.id, parse(itemUpdateInput, req.body), await clock(req)));
+    r.put<P<'id'>>(`${W}/items/:id`, async (req) => itemsSvc.editItem(ctx.db, req.walletId, req.params.id, parse(itemEditInput, req.body), await clock(req)));
     r.post<P<'id'>>(`${W}/items/:id/end`, async (req) =>
       itemsSvc.endRecurring(ctx.db, req.walletId, req.params.id, parse(itemEndInput, req.body).lastMonth, await clock(req)),
     );

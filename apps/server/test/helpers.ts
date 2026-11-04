@@ -77,6 +77,7 @@ export class Client {
   get = (url: string) => this.req('GET', url);
   post = (url: string, body?: unknown) => this.req('POST', url, body ?? {});
   patch = (url: string, body?: unknown) => this.req('PATCH', url, body ?? {});
+  put = (url: string, body?: unknown) => this.req('PUT', url, body ?? {});
   del = (url: string) => this.req('DELETE', url);
   w = (path: string) => `/api/wallets/${this.walletId}${path}`;
 }

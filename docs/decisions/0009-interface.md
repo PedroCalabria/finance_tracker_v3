@@ -14,6 +14,9 @@
   - Em contêiner com menos de 1280px (notebooks), **Método aparece embaixo do Banco** e **Observação embaixo do Serviço**; em telas largas as 10 colunas aparecem separadas.
   - Abaixo de **1024px** a tabela vira **lista de cards** (Serviço, Valor, Parcela, Data p/ pagamento + selo e ação). Abaixo de 768px, menu vira gaveta, "+ Adicionar" vira botão flutuante e modais sobem da base da tela.
 - **Formulários:** datas com `<input type="date">` nativo (calendário do próprio aparelho); valores com campo próprio que aceita "1.234,56"; rótulo sempre visível; "(opcional)" nos opcionais.
+- **Um formulário para cadastrar e editar:** `ItemFormModal` serve aos dois; ao clicar numa linha ele abre preenchido, com status, pagamentos e ações (encerrar, cancelar parcelas, mover de fatura, excluir). Quando a mudança vai recriar os meses, um aviso diz isso antes de salvar (e diz por que não dá, se já houver pagamento). Linhas criadas pela fatura só editam a observação.
+- **Cadastro rápido nos seletores:** "+ Nova categoria" e "+ Nova conta"/"+ Novo cartão" no fim das listas do lançamento; a conta é criada ao salvar e passa a valer em Contas e cartões. Fora do crédito só aparecem contas; se a pessoa só tem cartões, o campo explica.
+- **Seletor de mês:** "Voltar para o mês atual" fica **à esquerda** do seletor, para o seletor não mudar de lugar quando o atalho aparece.
 - **Acessibilidade:** foco preso nos modais (Esc fecha, foco volta a quem abriu), `aria-current` no menu, `aria-sort` nos cabeçalhos, `aria-expanded` no expandir, selos com texto, contraste AA nos dois temas.
 - **Tema:** escolha salva no navegador (`ff-theme`), aplicada antes de pintar a tela.
 

@@ -1,19 +1,20 @@
 import { useState } from 'react';
 import { METHOD_LABEL, addMonths, formatMonthLong, formatMonthShort, type OccurrenceRow } from '@ff/shared';
-import { Button, ConfirmDialog, Field, Modal, MoneyInput, Notice, StatusBadge, brl, dateBR, errorText, rowBadge, useToast } from '../components/ui';
+import { Button, ConfirmDialog, Field, Loading, Modal, MoneyInput, Notice, StatusBadge, brl, dateBR, errorText, rowBadge, useToast } from '../components/ui';
 import { api } from '../lib/api';
-import { invalidateFinance, walletUrl } from '../lib/queries';
+import { invalidateFinance, useItem, walletUrl } from '../lib/queries';
+import { ItemFormModal } from './ItemFormModal';
 
 /**
- * Detalhe de uma linha (etapas 3–5). Edita só este mês: valor previsto, data e
- * observação. Numa recorrente, o valor novo vale daqui em diante (ADR-0004).
+ * Detalhe de uma linha (etapas 3–5). Edita tudo do lançamento com o mesmo
+ * formulário do cadastro (ADR-0004); valor, data p/ pagamento e observação são
+ * deste mês. Linhas criadas pela fatura só aceitam observação.
  * Ações do item: encerrar recorrência, cancelar parcelas, mover de fatura, excluir.
  */
 export function EditOccurrenceModal({ walletId, row, onClose, onPay }: { walletId: string; row: OccurrenceRow; onClose: () => void; onPay: () => void }) {
   const toast = useToast();
+  const item = useItem(walletId, row.systemKind ? null : row.itemId);
   const credit = !!row.invoice || row.method === 'credit';
-  const [expected, setExpected] = useState<number | null>(row.expectedCents);
-  const [dueDate, setDueDate] = useState(row.dueDate ?? '');
   const [note, setNote] = useState(row.note ?? '');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
@@ -26,8 +27,6 @@ export function EditOccurrenceModal({ walletId, row, onClose, onPay }: { walletI
     setErr('');
     try {
       await api.patch(`${W}/occurrences/${row.id}`, {
-        expectedCents: !system && expected !== row.expectedCents ? expected : undefined,
-        dueDate: !credit && (dueDate || null) !== row.dueDate ? dueDate || null : undefined,
         note: note !== (row.note ?? '') ? note : undefined,
         version: row.version,
       });
@@ -115,6 +114,93 @@ export function EditOccurrenceModal({ walletId, row, onClose, onPay }: { walletI
     );
   }
 
+  const payButton = canPay && (
+    <Button variant="secondary" icon="check" onClick={onPay} style={{ marginRight: 'auto' }}>
+      {row.type === 'income' ? 'Marcar como recebido' : 'Marcar como pago'}
+    </Button>
+  );
+  const status = (
+    <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+      <StatusBadge status={b.status} label={b.label} />
+      {row.projected && <span className="ff-caption">Mês previsto: ao salvar, ele passa a existir.</span>}
+    </div>
+  );
+  const paymentsList = row.payments.length > 0 && (
+    <dl className="app-kv">
+      {row.payments.map((p) => (
+        <div key={p.id} style={{ display: 'contents' }}>
+          <dt>
+            {row.type === 'income' ? 'Recebido em' : 'Pago em'} {dateBR(p.paidAt)}
+          </dt>
+          <dd>
+            {brl(p.amountCents)}
+            {p.attachments.map((a) => (
+              <a key={a.id} className="app-attach" style={{ marginLeft: 8 }} href={`${W}/attachments/${a.id}`} target="_blank" rel="noreferrer">
+                {a.name}
+              </a>
+            ))}
+          </dd>
+        </div>
+      ))}
+    </dl>
+  );
+  const actions = !system && !row.projected && (
+    <div className="app-actions-row">
+      {row.form === 'recurring' && (
+        <Button variant="ghost" size="sm" onClick={() => setConfirm('end')}>
+          Encerrar a partir deste mês
+        </Button>
+      )}
+      {row.form === 'installment' && (
+        <Button variant="ghost" size="sm" onClick={() => setConfirm('cancel')}>
+          Cancelar parcelas que faltam
+        </Button>
+      )}
+      {row.invoice?.status === 'open' && (
+        <Button variant="ghost" size="sm" onClick={() => setConfirm('move')}>
+          Mover para outra fatura
+        </Button>
+      )}
+      <Button variant="ghost" size="sm" icon="trash" onClick={() => setConfirm('delete')}>
+        Excluir
+      </Button>
+    </div>
+  );
+
+  if (!system) {
+    if (!item.data) {
+      return (
+        <Modal wide title={row.description} onClose={onClose}>
+          {item.isError ? <Notice tone="danger">{errorText(item.error)}</Notice> : <Loading />}
+        </Modal>
+      );
+    }
+    return (
+      <ItemFormModal
+        walletId={walletId}
+        onClose={onClose}
+        edit={{
+          row,
+          item: item.data,
+          top: (
+            <>
+              {status}
+              {paymentsList}
+            </>
+          ),
+          bottom: (
+            <>
+              {err && <Notice tone="danger">{err}</Notice>}
+              {actions}
+            </>
+          ),
+          footerStart: payButton,
+        }}
+      />
+    );
+  }
+
+  // Linha criada pela fatura (ajuste, saldo transferido): só a observação muda.
   return (
     <Modal
       wide
@@ -123,11 +209,7 @@ export function EditOccurrenceModal({ walletId, row, onClose, onPay }: { walletI
       onClose={onClose}
       footer={
         <>
-          {canPay && (
-            <Button variant="secondary" icon="check" onClick={onPay} style={{ marginRight: 'auto' }}>
-              {row.type === 'income' ? 'Marcar como recebido' : 'Marcar como pago'}
-            </Button>
-          )}
+          {payButton}
           <Button variant="ghost" onClick={onClose}>
             Fechar
           </Button>
@@ -137,61 +219,20 @@ export function EditOccurrenceModal({ walletId, row, onClose, onPay }: { walletI
         </>
       }
     >
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-        <StatusBadge status={b.status} label={b.label} />
-        {row.projected && <span className="ff-caption">Mês previsto: ao salvar, ele passa a existir.</span>}
-      </div>
-      {row.payments.length > 0 && (
-        <dl className="app-kv">
-          {row.payments.map((p) => (
-            <div key={p.id} style={{ display: 'contents' }}>
-              <dt>{row.type === 'income' ? 'Recebido em' : 'Pago em'} {dateBR(p.paidAt)}</dt>
-              <dd>
-                {brl(p.amountCents)}
-                {p.attachments.map((a) => (
-                  <a key={a.id} className="app-attach" style={{ marginLeft: 8 }} href={`${W}/attachments/${a.id}`} target="_blank" rel="noreferrer">
-                    {a.name}
-                  </a>
-                ))}
-              </dd>
-            </div>
-          ))}
-        </dl>
-      )}
+      {status}
+      {paymentsList}
       <div className="app-grid2">
-        <Field label={row.form === 'recurring' ? 'Valor previsto (vale daqui em diante)' : 'Valor previsto'} htmlFor="ed-amount" hint={system ? 'Calculado pela fatura.' : undefined}>
-          <MoneyInput id="ed-amount" value={expected} onChange={setExpected} disabled={system} />
+        <Field label="Valor previsto" htmlFor="ed-amount" hint="Calculado pela fatura.">
+          <MoneyInput id="ed-amount" value={row.expectedCents} onChange={() => {}} disabled />
         </Field>
-        <Field label="Data p/ pagamento" optional={!credit} htmlFor="ed-due" hint={credit ? 'No crédito, é o vencimento da fatura.' : undefined}>
-          <input id="ed-due" type="date" className="ff-input ff-num" value={dueDate} disabled={credit} onChange={(e) => setDueDate(e.target.value)} />
+        <Field label="Data p/ pagamento" htmlFor="ed-due" hint={credit ? 'No crédito, é o vencimento da fatura.' : undefined}>
+          <input id="ed-due" type="date" className="ff-input ff-num" value={row.dueDate ?? ''} disabled readOnly />
         </Field>
       </div>
       <Field label="Observação deste mês" optional htmlFor="ed-note">
         <textarea id="ed-note" className="ff-input" value={note} onChange={(e) => setNote(e.target.value)} maxLength={500} placeholder="Ex.: veio com multa" />
       </Field>
       {err && <Notice tone="danger">{err}</Notice>}
-      {!system && !row.projected && (
-        <div className="app-actions-row">
-          {row.form === 'recurring' && (
-            <Button variant="ghost" size="sm" onClick={() => setConfirm('end')}>
-              Encerrar a partir deste mês
-            </Button>
-          )}
-          {row.form === 'installment' && (
-            <Button variant="ghost" size="sm" onClick={() => setConfirm('cancel')}>
-              Cancelar parcelas que faltam
-            </Button>
-          )}
-          {row.invoice?.status === 'open' && (
-            <Button variant="ghost" size="sm" onClick={() => setConfirm('move')}>
-              Mover para outra fatura
-            </Button>
-          )}
-          <Button variant="ghost" size="sm" icon="trash" onClick={() => setConfirm('delete')}>
-            Excluir
-          </Button>
-        </div>
-      )}
     </Modal>
   );
 }

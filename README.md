@@ -26,6 +26,8 @@ cp .env.example .env          # no Windows: copy .env.example .env
 # gere JWT_SECRET e ATTACHMENTS_KEY com os comandos indicados no próprio .env.example
 
 docker compose up -d db       # sobe só o Postgres em 127.0.0.1:5432
+# Se a 5432 já estiver ocupada (ex.: Postgres instalado no Windows), ponha DB_PORT=5433
+# no .env e use a mesma porta no DATABASE_URL e no TEST_DATABASE_URL.
 npm run db:migrate
 npm run dev                   # API :3000 + worker + interface :5173
 ```
@@ -37,7 +39,7 @@ docker compose exec db psql -U financas -c "create database financas_test"
 TEST_DATABASE_URL=postgres://financas:financas@localhost:5432/financas_test npm test
 npm run typecheck
 ```
-São 18 testes de regras puras e 42 de integração (API inteira contra o Postgres, com o relógio fixo em 03/11/2026).
+São 18 testes de regras puras e 50 de integração (API inteira contra o Postgres, com o relógio fixo em 03/11/2026).
 
 ## Comandos
 | Comando | O que faz |

@@ -48,7 +48,7 @@ export function OccurrenceTable({ walletId, rows, onPay, onOpen }: { walletId: s
             {th('Categoria', 'category')}
             {th('Parcela')}
             {th('Valor', 'value', true)}
-            {th('Data p/ pagamento', 'due')}
+            {th(rows[0]?.type === 'income' ? 'Data p/ recebimento' : 'Data p/ pagamento', 'due')}
             <th className="app-col-method">Método</th>
             <th>Banco</th>
             {th(rows[0]?.type === 'income' ? 'Data do recebimento' : 'Data do pagamento')}

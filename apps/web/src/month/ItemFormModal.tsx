@@ -1,107 +1,259 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { METHODS, METHOD_LABEL, formatDateBR, formatMonthShort, type Category, type ItemForm, type ItemType, type Method } from '@ff/shared';
+import {
+  METHODS,
+  METHOD_LABEL,
+  dateInMonth,
+  formatDateBR,
+  formatMonthShort,
+  type Account,
+  type Category,
+  type ItemDetail,
+  type ItemForm,
+  type ItemType,
+  type Method,
+  type OccurrenceRow,
+} from '@ff/shared';
 import { Button, Field, Modal, MoneyInput, Notice, Segmented, errorText, fieldErrors, useToast } from '../components/ui';
-import { api } from '../lib/api';
+import { ApiError, api } from '../lib/api';
 import { todayISO } from '../lib/hooks';
 import { invalidateFinance, useAccounts, useCategories, useInvoicePreview, walletUrl } from '../lib/queries';
 
+/** Contexto da edição: a linha aberta, o item dela e os pedaços que só existem ao editar. */
+export interface EditContext {
+  row: OccurrenceRow;
+  item: ItemDetail;
+  /** Situação do mês (status, pagamentos), acima do formulário. */
+  top?: ReactNode;
+  /** Ações do lançamento (encerrar, mover, excluir), abaixo do formulário. */
+  bottom?: ReactNode;
+  /** Começo do rodapé (marcar como pago). */
+  footerStart?: ReactNode;
+}
+
+type Props = { walletId: string; onClose: () => void } & ({ edit: EditContext } | { edit?: undefined; type: ItemType; month: string; currentMonth: string });
+
+interface NewAccount {
+  name: string;
+  bank: string;
+  closingDay: string;
+  dueDay: string;
+}
+
+const BANKS = ['Banco do Brasil', 'Bradesco', 'XP', 'Nubank', 'Itaú', 'Caixa', 'Santander', 'Inter'];
+const fieldError = (message: string, field: string) => Object.assign(new Error(message), { fields: { [field]: message } });
+
 /**
- * Cadastro de despesa ou entrada (etapa 3). Obrigatórios: serviço, valor, data e
- * método. "Já foi pago?" tem padrão pela regra (ADR-0004): única no pix/débito
- * com data até hoje nasce paga; parcelas e recorrentes começam como promessa.
+ * Cadastro e edição de despesa ou entrada (etapa 3, ADR-0004). Obrigatórios:
+ * serviço, valor, data e método. No cadastro, "Já foi pago?" tem padrão pela
+ * regra: única no pix/débito com data até hoje nasce paga; parcelas e
+ * recorrentes começam como promessa. Nas entradas, a própria data é a do
+ * recebimento (e do lembrete): não há "data p/ pagamento" separada.
+ * Na edição, mudar tipo, forma, parcelas, total, cartão ou a data de parcelada/
+ * recorrente recria os meses (o servidor recusa se já houver pagamento).
  */
-export function ItemFormModal({ walletId, type: initialType, month, currentMonth, onClose }: { walletId: string; type: ItemType; month: string; currentMonth: string; onClose: () => void }) {
+export function ItemFormModal(props: Props) {
+  const { walletId, onClose } = props;
+  const e = props.edit;
   const toast = useToast();
   const qc = useQueryClient();
   const categories = useCategories(walletId);
   const accounts = useAccounts(walletId);
   const today = todayISO();
+
+  const initialType: ItemType = e ? e.item.type : props.type;
+  const initialMethod: Method = e ? e.item.method : initialType === 'income' ? 'transfer' : 'pix';
   // Lançando num mês que não é o atual, a data sugerida já cai nele.
-  const defaultDate = month === currentMonth || !month ? today : `${month}-01`;
+  const defaultDate = e ? e.item.entryDate : props.month === props.currentMonth || !props.month ? today : `${props.month}-01`;
+  // Entrada em edição: a data do recebimento é a deste mês.
+  const initialReceipt = e
+    ? (e.row.dueDate ?? (e.item.form === 'single' ? e.item.entryDate : dateInMonth(e.row.competenceMonth, Number(e.item.entryDate.slice(8, 10)))))
+    : defaultDate;
 
   const [type, setType] = useState<ItemType>(initialType);
-  const [form, setForm] = useState<ItemForm>('single');
-  const [description, setDescription] = useState('');
-  const [amount, setAmount] = useState<number | null>(null);
-  const [installments, setInstallments] = useState('2');
+  const [form, setForm] = useState<ItemForm>(e ? e.item.form : 'single');
+  const [description, setDescription] = useState(e ? e.item.description : '');
+  const [amount, setAmount] = useState<number | null>(e ? (e.item.form === 'installment' ? e.item.totalCents : e.row.expectedCents) : null);
+  const [occAmount, setOccAmount] = useState<number | null>(e ? e.row.expectedCents : null);
+  const [installments, setInstallments] = useState(e?.item.installments ? String(e.item.installments) : '2');
   const [date, setDate] = useState(defaultDate);
-  const [dueDate, setDueDate] = useState('');
-  const [method, setMethod] = useState<Method>(initialType === 'income' ? 'transfer' : 'pix');
-  const [accountId, setAccountId] = useState('');
-  const [categoryId, setCategoryId] = useState('');
-  const [variable, setVariable] = useState(false);
-  const [note, setNote] = useState('');
+  const [receipt, setReceipt] = useState(initialReceipt);
+  const [dueDate, setDueDate] = useState(e && initialMethod !== 'credit' ? (e.row.dueDate ?? '') : '');
+  const [method, setMethod] = useState<Method>(initialMethod);
+  const [accountId, setAccountId] = useState(e?.item.accountId ?? '');
+  const [categoryId, setCategoryId] = useState(e?.item.categoryId ?? '');
+  const [variable, setVariable] = useState(e ? e.item.variableAmount : false);
+  const [note, setNote] = useState(e?.row.note ?? '');
   const [paidTouched, setPaidTouched] = useState(false);
   const [alreadyPaid, setAlreadyPaid] = useState(false);
   const [newCategory, setNewCategory] = useState<string | null>(null);
+  const [newAccount, setNewAccount] = useState<NewAccount | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<unknown>(null);
 
+  const income = type === 'income';
   const credit = method === 'credit';
   const methods = METHODS.filter((m) => type === 'expense' || m !== 'credit');
-  const accountOptions = (accounts.data ?? []).filter((a) => (credit ? a.kind === 'credit_card' : a.kind === 'account'));
+  const accountOptions = useMemo(() => {
+    const list: Array<Pick<Account, 'id' | 'name' | 'kind'>> = (accounts.data ?? []).filter((a) => (credit ? a.kind === 'credit_card' : a.kind === 'account'));
+    // Na edição, a conta atual continua na lista mesmo arquivada (senão ela sumiria sem a pessoa pedir).
+    const current = e?.row.account;
+    if (current && current.id === e.item.accountId && (current.kind === 'credit_card') === credit && !list.some((a) => a.id === current.id)) list.push(current);
+    return list;
+  }, [accounts.data, credit, e]);
+  const onlyCards = !credit && accountOptions.length === 0 && (accounts.data ?? []).some((a) => a.kind === 'credit_card');
   const catOptions: Category[] = (categories.data ?? []).filter((c) => c.type === type);
-  const preview = useInvoicePreview(walletId, credit ? accountId : null, date);
+  const preview = useInvoicePreview(walletId, credit && !newAccount ? accountId : null, date);
 
-  // Padrão do "Já foi pago?" até a pessoa mexer nele.
-  const suggestedPaid = form === 'single' && ['pix', 'debit', 'cash', 'transfer'].includes(method) && !dueDate && date <= today;
+  // O que vai para a API como "data" e "data p/ pagamento" (nas entradas, as duas vêm da data do recebimento).
+  const typeOrFormChanged = !!e && (type !== e.item.type || form !== e.item.form);
+  const sentDate = income && e ? (form === 'single' || typeOrFormChanged ? receipt : e.item.entryDate) : date;
+  const sentDue = credit ? null : income ? (e ? receipt : date) : dueDate || null;
+
+  // Mudanças que recriam os meses (espelha `editItem` no servidor).
+  const structural =
+    !!e &&
+    (typeOrFormChanged ||
+      credit !== (e.item.method === 'credit') ||
+      (credit && (newAccount !== null || accountId !== (e.item.accountId ?? ''))) ||
+      (form === 'installment' && (Number(installments) !== e.item.installments || amount !== e.item.totalCents)) ||
+      (sentDate !== e.item.entryDate && (credit || form !== 'single')));
+  // Mesmas recusas do servidor, avisadas antes de salvar.
+  const blocked = !e
+    ? null
+    : e.item.occurrences.some((o) => o.payments.length > 0)
+      ? e.item.form === 'recurring'
+        ? 'este lançamento já tem meses pagos. Encerre a recorrência e cadastre de novo.'
+        : 'este lançamento já tem pagamento registrado. Desfaça o pagamento antes ou cadastre de novo.'
+      : e.item.occurrences.some((o) => o.invoice && o.invoice.status !== 'open')
+        ? 'parte deste lançamento está numa fatura já paga. Cancele as parcelas futuras e cadastre de novo.'
+        : null;
+  const editingParcel = !!e && e.item.form === 'installment' && form === 'installment';
+
+  // Padrão do "Já foi pago?" até a pessoa mexer nele (só no cadastro).
+  const suggestedPaid = form === 'single' && ['pix', 'debit', 'cash', 'transfer'].includes(method) && (income || !dueDate) && date <= today;
   useEffect(() => {
     if (!paidTouched) setAlreadyPaid(suggestedPaid);
   }, [suggestedPaid, paidTouched]);
   useEffect(() => {
+    if (!accounts.data || newAccount) return;
     if (credit && accountOptions.length === 1 && !accountOptions.some((a) => a.id === accountId)) setAccountId(accountOptions[0]!.id);
-    if (!accountOptions.some((a) => a.id === accountId) && accountId) setAccountId('');
-  }, [credit, accountOptions, accountId]);
+    else if (accountId && !accountOptions.some((a) => a.id === accountId)) setAccountId('');
+  }, [accounts.data, credit, accountOptions, accountId, newAccount]);
 
-  const verb = type === 'income' ? 'recebido' : 'pago';
+  const verb = income ? 'recebido' : 'pago';
   const f = fieldErrors(err);
   const perInstallment = useMemo(() => (form === 'installment' && amount && Number(installments) >= 2 ? Math.floor(amount / Number(installments)) : null), [form, amount, installments]);
 
+  async function createAccount(acc: NewAccount): Promise<string> {
+    if (!acc.name.trim()) throw fieldError('Informe o nome.', 'accName');
+    if (!acc.bank.trim()) throw fieldError('Informe o banco.', 'accBank');
+    try {
+      const days = credit ? { closingDay: Number(acc.closingDay) || undefined, dueDay: Number(acc.dueDay) || undefined } : {};
+      const created = await api.post<Account>(`${walletUrl(walletId)}/accounts`, { name: acc.name.trim(), bank: acc.bank.trim(), kind: credit ? 'credit_card' : 'account', ...days });
+      return created.id;
+    } catch (ex) {
+      // Os erros do cadastro de conta vão para os campos da conta nova, não para os do lançamento.
+      if (ex instanceof ApiError) {
+        const map: Record<string, string> = { name: 'accName', bank: 'accBank', closingDay: 'accClosing', dueDay: 'accDue' };
+        const fields = Object.fromEntries(Object.entries(ex.fields).map(([k, v]) => [map[k] ?? k, v]));
+        throw new ApiError(ex.status, ex.code, ex.message, fields);
+      }
+      throw ex;
+    }
+  }
+
   async function save() {
     setErr(null);
-    if (!description.trim()) return setErr(Object.assign(new Error('Informe o serviço.'), { fields: { description: 'Informe o serviço.' } }));
-    if (!amount) return setErr(Object.assign(new Error('Informe o valor.'), { fields: { amountCents: 'Informe o valor.' } }));
+    if (!description.trim()) return setErr(fieldError('Informe o serviço.', 'description'));
+    if (!amount) return setErr(fieldError('Informe o valor.', 'amountCents'));
+    if (editingParcel && !structural && !occAmount) return setErr(fieldError('Informe o valor da parcela.', 'occurrenceCents'));
     setBusy(true);
     try {
       let catId = categoryId || null;
       if (newCategory?.trim()) {
         const c = await api.post<Category>(`${walletUrl(walletId)}/categories`, { name: newCategory.trim(), type });
         catId = c.id;
-        void qc.invalidateQueries({ queryKey: ['categories', walletId] });
+        // Guarda a escolha: se o lançamento falhar, salvar de novo não cria a categoria duas vezes.
+        await qc.invalidateQueries({ queryKey: ['categories', walletId] });
+        setCategoryId(c.id);
+        setNewCategory(null);
       }
-      await api.post(`${walletUrl(walletId)}/items`, {
+      let accId = accountId || null;
+      if (newAccount) {
+        accId = await createAccount(newAccount);
+        await qc.invalidateQueries({ queryKey: ['accounts', walletId] });
+        setAccountId(accId);
+        setNewAccount(null);
+      }
+      const common = {
         type,
         form,
         description: description.trim(),
         amountCents: amount,
         installments: form === 'installment' ? Number(installments) : undefined,
         variableAmount: form === 'recurring' ? variable : undefined,
-        date,
-        dueDate: credit ? undefined : dueDate || undefined,
+        date: sentDate,
         method,
-        accountId: accountId || undefined,
-        categoryId: catId ?? undefined,
-        alreadyPaid: credit ? undefined : alreadyPaid,
-        note: note.trim() || undefined,
-      });
+        accountId: accId ?? undefined,
+      };
+      if (e) {
+        await api.put(`${walletUrl(walletId)}/items/${e.item.id}`, {
+          ...common,
+          accountId: accId,
+          categoryId: catId,
+          dueDate: sentDue,
+          occurrenceId: e.row.id,
+          occurrenceCents: editingParcel && occAmount ? occAmount : undefined,
+          note: note.trim() || null,
+          version: e.row.version,
+        });
+      } else {
+        await api.post(`${walletUrl(walletId)}/items`, {
+          ...common,
+          categoryId: catId ?? undefined,
+          dueDate: sentDue ?? undefined,
+          alreadyPaid: credit ? undefined : alreadyPaid,
+          note: note.trim() || undefined,
+        });
+      }
       invalidateFinance(walletId);
-      toast(type === 'income' ? 'Entrada adicionada.' : 'Despesa adicionada.');
+      toast(e ? 'Alterações salvas.' : income ? 'Entrada adicionada.' : 'Despesa adicionada.');
       onClose();
-    } catch (e) {
-      setErr(e);
+    } catch (ex) {
+      setErr(ex);
       setBusy(false);
     }
   }
 
   const errFields = (err as { fields?: Record<string, string> } | null)?.fields ?? f;
+  const dateLabel = credit ? 'Data da compra' : 'Data';
+  const dateHint = income && form === 'recurring' ? (e ? 'O dia vale daqui em diante.' : 'O dia vale para todos os meses.') : undefined;
+  const dateValue = income && e ? receipt : date;
+  const onDate = (v: string) => (income && e ? setReceipt(v) : setDate(v));
+  const dateInput = (id: string) => <input id={id} type="date" className="ff-input ff-num" value={dateValue} onChange={(ev) => onDate(ev.target.value)} />;
+  const amountLabel = form === 'installment' ? 'Valor total' : form === 'recurring' ? (e ? 'Valor do mês (vale daqui em diante)' : 'Valor do mês') : 'Valor';
+  const dueLabel =
+    form === 'recurring'
+      ? e
+        ? 'Data p/ pagamento (o dia vale daqui em diante)'
+        : 'Vencimento (o dia vale para todos os meses)'
+      : form === 'installment'
+        ? e && e.item.form === 'installment'
+          ? 'Data p/ pagamento desta parcela'
+          : 'Data p/ pagamento da 1ª parcela'
+        : 'Data p/ pagamento';
+  const accountValue = newAccount ? '__new' : accountId;
+
   return (
     <Modal
       wide
-      title={type === 'income' ? 'Adicionar entrada' : 'Adicionar despesa'}
+      title={e ? e.row.description : income ? 'Adicionar entrada' : 'Adicionar despesa'}
+      subtitle={e ? [e.row.category?.name, e.row.installmentLabel, METHOD_LABEL[e.row.method], e.row.account?.name].filter(Boolean).join(' · ') : undefined}
       onClose={onClose}
       footer={
         <>
+          {e?.footerStart}
           <Button variant="ghost" onClick={onClose}>
             Cancelar
           </Button>
@@ -111,6 +263,7 @@ export function ItemFormModal({ walletId, type: initialType, month, currentMonth
         </>
       }
     >
+      {e?.top}
       <Segmented
         label="Tipo"
         value={type}
@@ -124,8 +277,8 @@ export function ItemFormModal({ walletId, type: initialType, month, currentMonth
           { value: 'income', label: 'Entrada' },
         ]}
       />
-      <Field label={type === 'income' ? 'Descrição' : 'Serviço'} htmlFor="it-desc" error={errFields.description}>
-        <input id="it-desc" className="ff-input" value={description} onChange={(e) => setDescription(e.target.value)} placeholder={type === 'income' ? 'Ex.: Salário' : 'Ex.: Conta de luz'} autoFocus />
+      <Field label={income ? 'Descrição' : 'Serviço'} htmlFor="it-desc" error={errFields.description}>
+        <input id="it-desc" className="ff-input" value={description} onChange={(ev) => setDescription(ev.target.value)} placeholder={income ? 'Ex.: Salário' : 'Ex.: Conta de luz'} autoFocus={!e} />
       </Field>
       <Field label="Como é">
         <Segmented
@@ -141,7 +294,7 @@ export function ItemFormModal({ walletId, type: initialType, month, currentMonth
       </Field>
       <div className="app-grid2">
         <Field
-          label={form === 'installment' ? 'Valor total' : form === 'recurring' ? 'Valor do mês' : 'Valor'}
+          label={amountLabel}
           htmlFor="it-amount"
           error={errFields.amountCents}
           hint={perInstallment ? `${installments}x de cerca de R$ ${(perInstallment / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` : undefined}
@@ -150,27 +303,39 @@ export function ItemFormModal({ walletId, type: initialType, month, currentMonth
         </Field>
         {form === 'installment' ? (
           <Field label="Número de parcelas" htmlFor="it-inst" error={errFields.installments}>
-            <input id="it-inst" className="ff-input" inputMode="numeric" value={installments} onChange={(e) => setInstallments(e.target.value.replace(/\D/g, '').slice(0, 3))} />
+            <input id="it-inst" className="ff-input" inputMode="numeric" value={installments} onChange={(ev) => setInstallments(ev.target.value.replace(/\D/g, '').slice(0, 3))} />
           </Field>
         ) : (
-          <Field label={credit ? 'Data da compra' : 'Data'} htmlFor="it-date" error={errFields.date}>
-            <input id="it-date" type="date" className="ff-input ff-num" value={date} onChange={(e) => setDate(e.target.value)} />
+          <Field label={dateLabel} htmlFor="it-date" error={errFields.date ?? (income ? errFields.dueDate : undefined)} hint={dateHint}>
+            {dateInput('it-date')}
           </Field>
         )}
       </div>
       {form === 'installment' && (
-        <Field label={credit ? 'Data da compra' : 'Data'} htmlFor="it-date2" error={errFields.date}>
-          <input id="it-date2" type="date" className="ff-input ff-num" value={date} onChange={(e) => setDate(e.target.value)} />
-        </Field>
+        <div className="app-grid2">
+          <Field label={dateLabel} htmlFor="it-date2" error={errFields.date ?? (income ? errFields.dueDate : undefined)}>
+            {dateInput('it-date2')}
+          </Field>
+          {editingParcel && (
+            <Field
+              label={`Valor desta parcela (${e!.row.installmentLabel})`}
+              htmlFor="it-occ-amount"
+              error={errFields.occurrenceCents}
+              hint={structural ? 'Recalculado ao mudar o total ou as parcelas.' : undefined}
+            >
+              <MoneyInput id="it-occ-amount" value={occAmount} onChange={setOccAmount} disabled={structural} />
+            </Field>
+          )}
+        </div>
       )}
       {form === 'recurring' && (
         <label className="app-checkbox">
-          <input type="checkbox" checked={variable} onChange={(e) => setVariable(e.target.checked)} />O valor varia todo mês (luz, água): o próximo mês começa com o último valor {verb}
+          <input type="checkbox" checked={variable} onChange={(ev) => setVariable(ev.target.checked)} />O valor varia todo mês (luz, água): o próximo mês começa com o último valor {verb}
         </label>
       )}
       <div className="app-grid2">
         <Field label="Método" htmlFor="it-method" error={errFields.method}>
-          <select id="it-method" className="ff-select" value={method} onChange={(e) => setMethod(e.target.value as Method)}>
+          <select id="it-method" className="ff-select" value={method} onChange={(ev) => setMethod(ev.target.value as Method)}>
             {methods.map((m) => (
               <option key={m} value={m}>
                 {METHOD_LABEL[m]}
@@ -178,33 +343,92 @@ export function ItemFormModal({ walletId, type: initialType, month, currentMonth
             ))}
           </select>
         </Field>
-        <Field label={credit ? 'Cartão' : 'Banco / conta'} optional={!credit} htmlFor="it-account" error={errFields.accountId}>
-          <select id="it-account" className="ff-select" value={accountId} onChange={(e) => setAccountId(e.target.value)}>
+        <Field
+          label={credit ? 'Cartão' : 'Banco / conta'}
+          optional={!credit}
+          htmlFor="it-account"
+          error={errFields.accountId}
+          hint={onlyCards && !newAccount ? 'Você só tem cartões cadastrados. Para Pix ou transferência, cadastre a conta.' : undefined}
+        >
+          <select
+            id="it-account"
+            className="ff-select"
+            value={accountValue}
+            onChange={(ev) => {
+              if (ev.target.value === '__new') setNewAccount({ name: '', bank: '', closingDay: '', dueDay: '' });
+              else {
+                setNewAccount(null);
+                setAccountId(ev.target.value);
+              }
+            }}
+          >
             <option value="">{credit ? 'Escolha o cartão' : 'Nenhuma'}</option>
             {accountOptions.map((a) => (
               <option key={a.id} value={a.id}>
                 {a.name}
               </option>
             ))}
+            <option value="__new">{credit ? '+ Novo cartão' : '+ Nova conta'}</option>
           </select>
         </Field>
       </div>
-      {credit && accountOptions.length === 0 && <Notice tone="danger">Cadastre um cartão em Contas e cartões para lançar no crédito.</Notice>}
+      {newAccount && (
+        <fieldset className="app-subform">
+          <legend className="app-subform__title">{credit ? 'Novo cartão' : 'Nova conta'}</legend>
+          <div className="app-grid2">
+            <Field label="Nome" htmlFor="it-acc-name" error={errFields.accName} hint={credit ? 'Ex.: Nubank Crédito' : 'Ex.: Conta Nubank'}>
+              <input id="it-acc-name" className="ff-input" value={newAccount.name} onChange={(ev) => setNewAccount({ ...newAccount, name: ev.target.value })} autoFocus />
+            </Field>
+            <Field label="Banco" htmlFor="it-acc-bank" error={errFields.accBank}>
+              <input id="it-acc-bank" className="ff-input" list="it-banks" value={newAccount.bank} onChange={(ev) => setNewAccount({ ...newAccount, bank: ev.target.value })} />
+              <datalist id="it-banks">
+                {BANKS.map((b) => (
+                  <option key={b} value={b} />
+                ))}
+              </datalist>
+            </Field>
+          </div>
+          {credit && (
+            <div className="app-grid2">
+              <Field label="Dia do fechamento" htmlFor="it-acc-close" error={errFields.accClosing}>
+                <input id="it-acc-close" className="ff-input" inputMode="numeric" value={newAccount.closingDay} onChange={(ev) => setNewAccount({ ...newAccount, closingDay: ev.target.value.replace(/\D/g, '').slice(0, 2) })} />
+              </Field>
+              <Field label="Dia do vencimento" htmlFor="it-acc-due" error={errFields.accDue}>
+                <input id="it-acc-due" className="ff-input" inputMode="numeric" value={newAccount.dueDay} onChange={(ev) => setNewAccount({ ...newAccount, dueDay: ev.target.value.replace(/\D/g, '').slice(0, 2) })} />
+              </Field>
+            </div>
+          )}
+          <p className="ff-caption app-m0">{credit ? 'O cartão é cadastrado' : 'A conta é cadastrada'} ao salvar e fica em Contas e cartões.</p>
+          <div>
+            <Button variant="ghost" size="sm" onClick={() => setNewAccount(null)}>
+              Escolher {credit ? 'um cartão' : 'uma conta'} da lista
+            </Button>
+          </div>
+        </fieldset>
+      )}
+      {credit && accountOptions.length === 0 && !newAccount && <Notice tone="danger">Cadastre um cartão para lançar no crédito: escolha "+ Novo cartão" acima.</Notice>}
       {credit && preview.data && (
         <Notice>
           Vai para a fatura de {formatMonthShort(preview.data.referenceMonth, true)}, que vence em {formatDateBR(preview.data.dueDate)}
           {form === 'installment' ? '. As outras parcelas vão para as faturas seguintes.' : '.'}
         </Notice>
       )}
-      {!credit && (
+      {structural && (
+        <Notice tone={blocked ? 'danger' : 'info'}>
+          {blocked
+            ? `Essa mudança recalcula todos os meses, mas ${blocked}`
+            : `Essa mudança recalcula todos os meses deste lançamento${credit || e!.item.method === 'credit' ? ' e as faturas' : ''}.`}
+        </Notice>
+      )}
+      {!credit && !income && (
         <Field
-          label={form === 'recurring' ? 'Vencimento (o dia vale para todos os meses)' : 'Data p/ pagamento'}
+          label={dueLabel}
           optional
           htmlFor="it-due"
           hint={form === 'recurring' ? 'Sem data, não há lembrete por email.' : 'Com data, você recebe o lembrete por email.'}
           error={errFields.dueDate}
         >
-          <input id="it-due" type="date" className="ff-input ff-num" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
+          <input id="it-due" type="date" className="ff-input ff-num" value={dueDate} onChange={(ev) => setDueDate(ev.target.value)} />
         </Field>
       )}
       <Field label="Categoria" optional htmlFor="it-cat" error={errFields.categoryId}>
@@ -213,9 +437,9 @@ export function ItemFormModal({ walletId, type: initialType, month, currentMonth
             id="it-cat"
             className="ff-select"
             value={categoryId}
-            onChange={(e) => {
-              if (e.target.value === '__new') setNewCategory('');
-              else setCategoryId(e.target.value);
+            onChange={(ev) => {
+              if (ev.target.value === '__new') setNewCategory('');
+              else setCategoryId(ev.target.value);
             }}
           >
             <option value="">Sem categoria</option>
@@ -228,17 +452,17 @@ export function ItemFormModal({ walletId, type: initialType, month, currentMonth
           </select>
         ) : (
           <span style={{ display: 'flex', gap: 8 }}>
-            <input id="it-cat" className="ff-input" placeholder="Nome da nova categoria" value={newCategory} onChange={(e) => setNewCategory(e.target.value)} autoFocus />
+            <input id="it-cat" className="ff-input" placeholder="Nome da nova categoria" value={newCategory} onChange={(ev) => setNewCategory(ev.target.value)} autoFocus />
             <Button variant="ghost" onClick={() => setNewCategory(null)}>
               Voltar
             </Button>
           </span>
         )}
       </Field>
-      {!credit && (
-        <Field label={type === 'income' ? 'Já foi recebido?' : 'Já foi pago?'}>
+      {!credit && !e && (
+        <Field label={income ? 'Já foi recebido?' : 'Já foi pago?'}>
           <Segmented
-            label={type === 'income' ? 'Já foi recebido?' : 'Já foi pago?'}
+            label={income ? 'Já foi recebido?' : 'Já foi pago?'}
             value={alreadyPaid ? 'yes' : 'no'}
             onChange={(v) => {
               setPaidTouched(true);
@@ -251,10 +475,11 @@ export function ItemFormModal({ walletId, type: initialType, month, currentMonth
           />
         </Field>
       )}
-      <Field label="Observação" optional htmlFor="it-note">
-        <textarea id="it-note" className="ff-input" value={note} onChange={(e) => setNote(e.target.value)} maxLength={500} />
+      <Field label={e ? 'Observação deste mês' : 'Observação'} optional htmlFor="it-note">
+        <textarea id="it-note" className="ff-input" value={note} onChange={(ev) => setNote(ev.target.value)} maxLength={500} placeholder={e ? 'Ex.: veio com multa' : undefined} />
       </Field>
       {err && !Object.keys(errFields).length ? <Notice tone="danger">{errorText(err)}</Notice> : null}
+      {e?.bottom}
     </Modal>
   );
 }

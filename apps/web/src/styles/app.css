@@ -78,6 +78,19 @@ textarea.ff-input { min-height: 88px; padding-top: var(--space-2); padding-botto
 .app-kv dt { color: var(--ink-muted); }
 .app-kv dd { margin: 0; font-weight: 600; font-variant-numeric: tabular-nums; }
 .app-actions-row { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+/* Mês e ano em duas listas (no lugar do input type=month, que falha no Safari) */
+.app-monthpick { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 7.5em); gap: var(--space-2); }
+.app-day { max-width: 8em; }
+/* Opções com explicação (ex.: alcance da exclusão de uma recorrente) */
+.app-choices { margin: 0; padding: 0; border: 0; min-width: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+.app-choices legend { padding: 0; margin-bottom: var(--space-2); }
+.app-choice { display: flex; align-items: flex-start; gap: var(--space-3); padding: var(--space-3) var(--space-4); border: 1px solid var(--border); border-radius: var(--radius-md); cursor: pointer; }
+.app-choice:hover { background: var(--surface-subtle); }
+.app-choice:has(input:checked) { border-color: var(--primary); background: var(--surface-subtle); }
+.app-choice:focus-within { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.app-choice input { width: 20px; height: 20px; margin: 2px 0 0; flex: none; accent-color: var(--primary); }
+.app-choice__title { display: block; font-weight: 600; }
+.app-choice__text { display: block; color: var(--ink-muted); font-size: 14px; }
 /* Cadastro rápido dentro de outro formulário (conta ou cartão novo no lançamento) */
 .app-subform { margin: 0; min-width: 0; padding: var(--space-4); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-subtle); display: flex; flex-direction: column; gap: var(--space-4); }
 .app-subform__title { padding: 0 var(--space-1); font-size: 15px; font-weight: 600; }

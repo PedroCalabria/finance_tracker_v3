@@ -11,7 +11,7 @@ import {
 } from '@ff/shared';
 import type { DB, Tx } from '../db/client';
 import { accounts, attachments, categories, invoices, items, occurrences, payments } from '../db/schema';
-import { badRequest, conflict, notFound } from '../http/errors';
+import { AppError, badRequest, conflict, notFound } from '../http/errors';
 import type { Clock } from './clock';
 import { ensureMaterialized, materializeProjection, projectionId, projectionsFor, type ProjectedSlot } from './projections';
 
@@ -217,6 +217,35 @@ export async function getOccurrenceChecked(tx: Tx, walletId: string, id: string)
 export async function getRow(tx: Tx, walletId: string, id: string, clock: Clock): Promise<OccurrenceRow> {
   const occ = await getOccurrenceChecked(tx, walletId, id);
   return (await buildRows(tx, [occ], clock))[0]!;
+}
+
+/**
+ * "Só este mês" (ADR-0004): o mês de uma recorrente fica Cancelado, sai dos
+ * totais, dos atrasados e dos lembretes, e não é recriado (`ensureMaterialized`
+ * e as projeções pulam meses que já existem). Mês previsto é gravado antes.
+ */
+export async function cancelRecurringMonth(db: DB, walletId: string, id: string, clock: Clock): Promise<OccurrenceRow> {
+  return db.transaction(async (tx) => {
+    const realId = await materializeProjection(tx, walletId, id, clock);
+    const occ = await getOccurrenceChecked(tx, walletId, realId);
+    const item = await tx.query.items.findFirst({ where: and(eq(items.id, occ.itemId), isNull(items.deletedAt)) });
+    if (!item) throw notFound('Lançamento');
+    if (item.form !== 'recurring') throw new AppError(400, 'not_recurring', 'Só lançamentos recorrentes podem ser excluídos por mês.');
+    if (occ.status === 'canceled') return getRow(tx, walletId, occ.id, clock);
+    const paid = await tx.query.payments.findFirst({ where: eq(payments.occurrenceId, occ.id), columns: { id: true } });
+    if (paid) throw conflict('Este mês já tem pagamento. Desfaça o pagamento antes de excluir o mês.', 'month_has_payment');
+    if (occ.invoiceId) {
+      const inv = await tx.query.invoices.findFirst({ where: eq(invoices.id, occ.invoiceId), columns: { status: true } });
+      if (inv && inv.status !== 'open') {
+        throw conflict('Este mês está numa fatura já paga. Desfaça o pagamento da fatura antes de excluir o mês.', 'month_in_paid_invoice');
+      }
+    }
+    await tx
+      .update(occurrences)
+      .set({ status: 'canceled', version: sql`${occurrences.version} + 1` })
+      .where(eq(occurrences.id, occ.id));
+    return getRow(tx, walletId, occ.id, clock);
+  });
 }
 
 /**

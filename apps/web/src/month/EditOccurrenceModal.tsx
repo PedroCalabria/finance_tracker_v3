@@ -1,15 +1,18 @@
 import { useState } from 'react';
-import { METHOD_LABEL, addMonths, formatMonthLong, formatMonthShort, type OccurrenceRow } from '@ff/shared';
+import { METHOD_LABEL, addMonths, formatMonthShort, type OccurrenceRow } from '@ff/shared';
 import { Button, ConfirmDialog, Field, Loading, Modal, MoneyInput, Notice, StatusBadge, brl, dateBR, errorText, rowBadge, useToast } from '../components/ui';
 import { api } from '../lib/api';
 import { invalidateFinance, useItem, walletUrl } from '../lib/queries';
+import { DeleteRecurringDialog } from './DeleteRecurringDialog';
 import { ItemFormModal } from './ItemFormModal';
 
 /**
  * Detalhe de uma linha (etapas 3–5). Edita tudo do lançamento com o mesmo
  * formulário do cadastro (ADR-0004); valor, data p/ pagamento e observação são
  * deste mês. Linhas criadas pela fatura só aceitam observação.
- * Ações do item: encerrar recorrência, cancelar parcelas, mover de fatura, excluir.
+ * Ações do item: cancelar parcelas, mover de fatura, excluir. Excluir uma
+ * recorrente pergunta o alcance (só este mês, este e os próximos, toda); nos meses
+ * previstos, só essa ação aparece.
  */
 export function EditOccurrenceModal({ walletId, row, onClose, onPay }: { walletId: string; row: OccurrenceRow; onClose: () => void; onPay: () => void }) {
   const toast = useToast();
@@ -18,7 +21,7 @@ export function EditOccurrenceModal({ walletId, row, onClose, onPay }: { walletI
   const [note, setNote] = useState(row.note ?? '');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
-  const [confirm, setConfirm] = useState<null | 'end' | 'cancel' | 'delete' | 'move'>(null);
+  const [confirm, setConfirm] = useState<null | 'cancel' | 'delete' | 'move'>(null);
   const system = !!row.systemKind;
   const W = walletUrl(walletId);
 
@@ -56,19 +59,6 @@ export function EditOccurrenceModal({ walletId, row, onClose, onPay }: { walletI
 
   const b = rowBadge(row);
   const canPay = !credit && !['paid', 'canceled'].includes(row.displayStatus);
-  if (confirm === 'end') {
-    return (
-      <ConfirmDialog
-        title="Encerrar este lançamento recorrente?"
-        message={`${formatMonthLong(row.competenceMonth)} fica como o último mês. Os meses seguintes deixam de aparecer; o histórico continua.`}
-        confirmLabel="Encerrar"
-        busy={busy}
-        error={err}
-        onClose={() => setConfirm(null)}
-        onConfirm={() => act(() => api.post(`${W}/items/${row.itemId}/end`, { lastMonth: row.competenceMonth }), 'Recorrência encerrada.')}
-      />
-    );
-  }
   if (confirm === 'cancel') {
     return (
       <ConfirmDialog
@@ -81,6 +71,9 @@ export function EditOccurrenceModal({ walletId, row, onClose, onPay }: { walletI
         onConfirm={() => act(() => api.post(`${W}/items/${row.itemId}/cancel`), 'Parcelas canceladas.')}
       />
     );
+  }
+  if (confirm === 'delete' && row.form === 'recurring') {
+    return <DeleteRecurringDialog walletId={walletId} row={row} firstMonth={item.data?.startMonth ?? null} onClose={() => setConfirm(null)} onDone={onClose} />;
   }
   if (confirm === 'delete') {
     return (
@@ -144,19 +137,15 @@ export function EditOccurrenceModal({ walletId, row, onClose, onPay }: { walletI
       ))}
     </dl>
   );
-  const actions = !system && !row.projected && (
+  // Mês previsto (projeção): só "Excluir" faz sentido; o servidor grava o mês antes, se preciso.
+  const actions = !system && (!row.projected || row.form === 'recurring') && (
     <div className="app-actions-row">
-      {row.form === 'recurring' && (
-        <Button variant="ghost" size="sm" onClick={() => setConfirm('end')}>
-          Encerrar a partir deste mês
-        </Button>
-      )}
       {row.form === 'installment' && (
         <Button variant="ghost" size="sm" onClick={() => setConfirm('cancel')}>
           Cancelar parcelas que faltam
         </Button>
       )}
-      {row.invoice?.status === 'open' && (
+      {!row.projected && row.invoice?.status === 'open' && (
         <Button variant="ghost" size="sm" onClick={() => setConfirm('move')}>
           Mover para outra fatura
         </Button>

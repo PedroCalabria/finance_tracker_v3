@@ -77,6 +77,22 @@ function chargeMonths(item: ItemRec, from: Month, to: Month): Month[] {
 }
 
 /**
+ * Mês de cobrança que gerou a ocorrência de competência `month`. Fora do crédito
+ * são o mesmo mês; no crédito, a cobrança pode cair até 2 meses antes da fatura.
+ * Se nenhuma cobrança da regra cai nessa fatura (ocorrência movida à mão), vale o próprio mês.
+ */
+export async function chargeMonthFor(tx: Tx, item: ItemRec, month: Month): Promise<Month> {
+  if (item.method !== 'credit' || !item.accountId) return month;
+  const account = (await tx.query.accounts.findFirst({ where: eq(accounts.id, item.accountId) })) ?? null;
+  const overrides = await invoiceOverrides(tx, item.accountId);
+  for (let k = 2; k >= 0; k--) {
+    const c = addMonths(month, -k);
+    if (c >= item.startMonth && slotFor(item, account, c, overrides).competenceMonth === month) return c;
+  }
+  return month;
+}
+
+/**
  * Grava as ocorrências de recorrentes que já chegaram (competência ≤ mês atual).
  * Idempotente: roda em toda leitura de mês e no job de avisos.
  */

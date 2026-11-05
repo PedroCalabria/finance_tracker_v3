@@ -17,6 +17,12 @@ const RESET_TTL_MS = 3600 * 1000;
 /** Reuso de refresh dentro desta janela é tratado como corrida entre abas, não roubo. */
 const REUSE_GRACE_MS = 30 * 1000;
 
+/**
+ * A aba que perdeu a corrida da rotação recebe este erro. A rota NÃO apaga os
+ * cookies nesse caso: eles já são os novos, gravados pela resposta da vencedora (ADR-0003).
+ */
+export const refreshSuperseded = () => new AppError(401, 'refresh_superseded', 'Sua sessão foi renovada em outra aba.');
+
 export interface IssuedSession {
   accessToken: string;
   refreshToken: string;
@@ -115,10 +121,9 @@ export async function refresh(ctx: AppContext, refreshToken: string | undefined,
   const row = await ctx.db.query.sessions.findFirst({ where: eq(sessions.refreshTokenHash, sha256(refreshToken)) });
   if (!row || row.revokedAt || row.expiresAt <= ctx.now()) throw unauthorized('Sua sessão terminou. Entre de novo.');
   if (row.rotatedAt) {
-    if (ctx.now().getTime() - row.rotatedAt.getTime() > REUSE_GRACE_MS) {
-      await ctx.db.update(sessions).set({ revokedAt: ctx.now() }).where(and(eq(sessions.familyId, row.familyId), isNull(sessions.revokedAt)));
-      ctx.log.warn({ userId: row.userId, familyId: row.familyId }, 'reuso de refresh token: sessão revogada');
-    }
+    if (ctx.now().getTime() - row.rotatedAt.getTime() <= REUSE_GRACE_MS) throw refreshSuperseded();
+    await ctx.db.update(sessions).set({ revokedAt: ctx.now() }).where(and(eq(sessions.familyId, row.familyId), isNull(sessions.revokedAt)));
+    ctx.log.warn({ userId: row.userId, familyId: row.familyId }, 'reuso de refresh token: sessão revogada');
     throw unauthorized('Sua sessão terminou. Entre de novo.');
   }
   const updated = await ctx.db
@@ -126,7 +131,8 @@ export async function refresh(ctx: AppContext, refreshToken: string | undefined,
     .set({ rotatedAt: ctx.now() })
     .where(and(eq(sessions.id, row.id), isNull(sessions.rotatedAt)))
     .returning({ id: sessions.id });
-  if (updated.length === 0) throw unauthorized('Sua sessão terminou. Entre de novo.');
+  // Outra requisição rotacionou este token entre a leitura e a escrita: também é corrida.
+  if (updated.length === 0) throw refreshSuperseded();
   return issueSession(ctx, row.userId, row.familyId, userAgent);
 }
 

@@ -14,7 +14,8 @@ export class AppError extends Error {
 }
 
 export const notFound = (what = 'Registro') => new AppError(404, 'not_found', `${what} não encontrado.`);
-export const conflict = (message = 'Isso foi alterado por outra pessoa. Recarregue a página.') => new AppError(409, 'conflict', message);
+/** 409. O código padrão é o de conflito de versão; recusas de regra usam um código próprio e estável. */
+export const conflict = (message = 'Isso foi alterado por outra pessoa. Recarregue a página.', code = 'conflict') => new AppError(409, code, message);
 export const badRequest = (message: string, fields?: Record<string, string>) => new AppError(400, 'bad_request', message, fields);
 export const unauthorized = (message = 'Faça login para continuar.') => new AppError(401, 'unauthorized', message);
 export const forbidden = (message = 'Você não tem acesso a isso.') => new AppError(403, 'forbidden', message);

@@ -79,9 +79,11 @@ export async function walletRoutes(app: FastifyInstance, ctx: AppContext): Promi
     r.get<P<'id'>>(`${W}/items/:id`, async (req) => itemsSvc.getItemDetail(ctx.db, req.walletId, req.params.id, await clock(req)));
     r.patch<P<'id'>>(`${W}/items/:id`, async (req) => itemsSvc.updateItem(ctx.db, req.walletId, req.params.id, parse(itemUpdateInput, req.body), await clock(req)));
     r.put<P<'id'>>(`${W}/items/:id`, async (req) => itemsSvc.editItem(ctx.db, req.walletId, req.params.id, parse(itemEditInput, req.body), await clock(req)));
-    r.post<P<'id'>>(`${W}/items/:id/end`, async (req) =>
-      itemsSvc.endRecurring(ctx.db, req.walletId, req.params.id, parse(itemEndInput, req.body).lastMonth, await clock(req)),
-    );
+    // "Este e os próximos": encerra antes da ocorrência escolhida; na primeira, exclui tudo (204).
+    r.post<P<'id'>>(`${W}/items/:id/end`, async (req, reply) => {
+      const detail = await itemsSvc.endRecurringFrom(ctx.db, req.walletId, req.params.id, parse(itemEndInput, req.body).occurrenceId, await clock(req));
+      return detail ? reply.send(detail) : reply.status(204).send();
+    });
     r.post<P<'id'>>(`${W}/items/:id/cancel`, async (req) => itemsSvc.cancelInstallments(ctx.db, req.walletId, req.params.id, await clock(req)));
     r.delete<P<'id'>>(`${W}/items/:id`, async (req, reply) => {
       await itemsSvc.deleteItem(ctx.db, req.walletId, req.params.id);
@@ -93,6 +95,8 @@ export async function walletRoutes(app: FastifyInstance, ctx: AppContext): Promi
     r.patch<P<'id'>>(`${W}/occurrences/:id`, async (req) =>
       occSvc.updateOccurrence(ctx.db, req.walletId, req.params.id, parse(occurrenceUpdateInput, req.body), await clock(req)),
     );
+    // "Só este mês" de uma recorrente (aceita projeção p_<itemId>_<mês>).
+    r.post<P<'id'>>(`${W}/occurrences/:id/cancel`, async (req) => occSvc.cancelRecurringMonth(ctx.db, req.walletId, req.params.id, await clock(req)));
     r.post<P<'id'>>(`${W}/occurrences/:id/payments`, async (req, reply) =>
       reply.status(201).send(await paymentsSvc.addPayment(ctx.db, req.walletId, req.params.id, parse(paymentInput, req.body), req.userId, await clock(req))),
     );

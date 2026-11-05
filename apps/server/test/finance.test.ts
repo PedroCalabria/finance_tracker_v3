@@ -64,7 +64,7 @@ describe('lançamentos únicos', () => {
 
 describe('parcelas', () => {
   it('divide o total e arredonda na última', async () => {
-    const item = await create({ description: 'Empréstimo da tia', form: 'installment', amountCents: 100000, installments: 3, date: '2026-11-03', dueDate: '2026-11-05' });
+    const item = await create({ description: 'Empréstimo da tia', form: 'installment', amountCents: 100000, installments: 3, date: '2026-11-05' });
     expect(item.occurrences.map((o: any) => [o.installmentLabel, o.expectedCents, o.dueDate])).toEqual([
       ['1/3', 33333, '2026-11-05'],
       ['2/3', 33333, '2026-12-05'],
@@ -83,7 +83,7 @@ describe('parcelas', () => {
     expect(find(await occ('2026-12'), 'Empréstimo da tia').displayStatus).toBe('paid');
   });
   it('cancelar a compra cancela só as parcelas futuras em aberto', async () => {
-    const item = await create({ description: 'Curso', form: 'installment', amountCents: 60000, installments: 3, date: '2026-10-10', dueDate: '2026-10-10' });
+    const item = await create({ description: 'Curso', form: 'installment', amountCents: 60000, installments: 3, date: '2026-10-10' });
     const first = item.occurrences[0];
     await c.post(c.w(`/occurrences/${first.id}/payments`), { paidAt: '2026-10-10', amountCents: 20000 });
     const after = (await c.post(c.w(`/items/${item.id}/cancel`))).json();
@@ -115,7 +115,7 @@ describe('pagamentos', () => {
 
 describe('recorrentes e projeções', () => {
   it('grava até o mês atual, marca atrasados e projeta o futuro', async () => {
-    await create({ description: 'Internet', form: 'recurring', amountCents: 12000, date: '2026-09-01', dueDate: '2026-09-20', method: 'boleto' });
+    await create({ description: 'Internet', form: 'recurring', amountCents: 12000, startMonth: '2026-09', day: 20, method: 'boleto' });
     const nov = await occ('2026-11');
     const internet = nov.filter((r: any) => r.description === 'Internet');
     // set e out atrasados aparecem em novembro, mais a de novembro
@@ -143,19 +143,21 @@ describe('recorrentes e projeções', () => {
     expect([after.projected, after.displayStatus]).toEqual([false, 'paid']);
   });
   it('valor variável copia o último valor pago', async () => {
-    const item = await create({ description: 'Água', form: 'recurring', amountCents: 9000, variableAmount: true, date: '2026-10-05', dueDate: '2026-10-05', method: 'boleto' });
+    const item = await create({ description: 'Água', form: 'recurring', amountCents: 9000, variableAmount: true, startMonth: '2026-10', day: 5, method: 'boleto' });
     const oct = item.occurrences.find((o: any) => o.competenceMonth === '2026-10');
     await c.post(c.w(`/occurrences/${oct.id}/payments`), { paidAt: '2026-10-05', amountCents: 11250 });
     expect(find(await occ('2026-12'), 'Água').expectedCents).toBe(11250);
   });
-  it('encerrar remove os meses seguintes sem pagamento', async () => {
-    const item = await create({ description: 'Academia', form: 'recurring', amountCents: 9900, date: '2026-11-01', dueDate: '2026-11-10' });
-    await c.post(c.w(`/items/${item.id}/end`), { lastMonth: '2026-11' });
+  it('"este e os próximos" num mês previsto mantém os anteriores', async () => {
+    const item = await create({ description: 'Academia', form: 'recurring', amountCents: 9900, startMonth: '2026-11', day: 10 });
+    const dec = find(await occ('2026-12'), 'Academia');
+    expect((await c.post(c.w(`/items/${item.id}/end`), { occurrenceId: dec.id })).statusCode).toBe(200);
+    expect(find(await occ('2026-12'), 'Academia')).toBeUndefined();
     expect(find(await occ('2027-01'), 'Academia')).toBeUndefined();
     expect(find(await occ('2026-11'), 'Academia')).toBeDefined();
   });
   it('entradas prometidas com marcar como recebido', async () => {
-    await c.post(c.w('/items'), { type: 'income', form: 'recurring', description: 'Salário', amountCents: 650000, date: '2026-11-05', dueDate: '2026-11-05', method: 'transfer' });
+    await c.post(c.w('/items'), { type: 'income', form: 'recurring', description: 'Salário', amountCents: 650000, startMonth: '2026-11', day: 5, method: 'transfer' });
     const sal = find(await occ('2026-11', 'income'), 'Salário');
     expect(sal.displayStatus).toBe('pending');
     await c.post(c.w(`/occurrences/${sal.id}/payments`), { paidAt: '2026-11-05', amountCents: 650000 });
@@ -212,7 +214,7 @@ describe('cartão e faturas', () => {
     expect([moved.competenceMonth, moved.dueDate]).toEqual(['2027-01', '2027-01-01']);
   });
   it('recorrente no crédito entra nas faturas e projeta nos meses futuros', async () => {
-    await create({ description: 'Netflix', form: 'recurring', method: 'credit', accountId: cards.nu, amountCents: 5590, date: '2026-11-15' });
+    await create({ description: 'Netflix', form: 'recurring', method: 'credit', accountId: cards.nu, amountCents: 5590, startMonth: '2026-11', day: 15 });
     const fut = (await c.get(c.w('/invoices?month=2027-02'))).json().find((i: any) => i.account.id === cards.nu);
     expect(fut.itemsCents).toBe(5590);
   });

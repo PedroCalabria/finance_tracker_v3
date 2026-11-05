@@ -79,17 +79,18 @@ export function hourIn(timeZone: string, now: Date = new Date()): number {
   return Number(h);
 }
 
-const MONTHS = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
+/** Nomes dos meses, em minúsculas ("novembro"). */
+export const MONTH_NAMES = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
 
 /** "2026-11" → "Novembro de 2026" */
 export function formatMonthLong(month: Month): string {
-  const name = MONTHS[Number(month.slice(5, 7)) - 1] ?? '';
+  const name = MONTH_NAMES[Number(month.slice(5, 7)) - 1] ?? '';
   return `${name.charAt(0).toUpperCase()}${name.slice(1)} de ${month.slice(0, 4)}`;
 }
 
 /** "2026-10" → "out" ; com ano → "out/2026" */
 export function formatMonthShort(month: Month, withYear = false): string {
-  const name = (MONTHS[Number(month.slice(5, 7)) - 1] ?? '').slice(0, 3);
+  const name = (MONTH_NAMES[Number(month.slice(5, 7)) - 1] ?? '').slice(0, 3);
   return withYear ? `${name}/${month.slice(0, 4)}` : name;
 }
 

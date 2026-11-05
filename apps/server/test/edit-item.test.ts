@@ -17,6 +17,13 @@ const create = async (body: Record<string, unknown>) => {
   if (res.statusCode !== 201) throw new Error(res.body);
   return res.json();
 };
+/** Datas como a tela envia: recorrente = mês de início + dia; parcelada fora do crédito = data desta parcela. */
+const datesOf = (item: Record<string, any>, row: Record<string, any>) => {
+  if (item.form === 'recurring') return { startMonth: item.startMonth, day: item.method === 'credit' ? Number(item.entryDate.slice(8, 10)) : item.dueDay };
+  if (item.form === 'installment' && item.method !== 'credit') return { dueDate: row.dueDate };
+  return { date: item.entryDate, dueDate: row.invoice ? null : row.dueDate };
+};
+
 /** Monta o corpo da edição a partir da linha, como a tela faz, com as mudanças por cima. */
 const edit = async (row: Record<string, any>, changes: Record<string, unknown>) => {
   const item = (await c.get(c.w(`/items/${row.itemId}`))).json();
@@ -32,8 +39,7 @@ const edit = async (row: Record<string, any>, changes: Record<string, unknown>) 
     installments: item.installments,
     occurrenceCents: item.form === 'installment' ? row.expectedCents : undefined,
     variableAmount: item.variableAmount,
-    date: item.entryDate,
-    dueDate: row.invoice ? null : row.dueDate,
+    ...datesOf(item, row),
     note: row.note,
     version: row.version,
     ...changes,
@@ -74,14 +80,15 @@ describe('edição simples', () => {
     expect(find(await occ('2026-12'), 'Revisão')).toBeDefined();
   });
   it('recorrente: valor e dia de pagamento valem daqui em diante', async () => {
-    await create({ description: 'Academia', form: 'recurring', amountCents: 10000, date: '2026-09-01', dueDate: '2026-09-10', method: 'boleto' });
-    const res = await edit(find(await occ('2026-11'), 'Academia', '2026-11'), { amountCents: 12000, dueDate: '2026-11-15' });
+    await create({ description: 'Academia', form: 'recurring', amountCents: 10000, startMonth: '2026-09', day: 10, method: 'boleto' });
+    const res = await edit(find(await occ('2026-11'), 'Academia', '2026-11'), { amountCents: 12000, day: 15 });
     expect(res.statusCode).toBe(200);
     const nov = find(await occ('2026-11'), 'Academia', '2026-11');
     expect([nov.expectedCents, nov.dueDate]).toEqual([12000, '2026-11-15']);
     const dec = find(await occ('2026-12'), 'Academia');
     expect([dec.expectedCents, dec.dueDate]).toEqual([12000, '2026-12-15']);
-    expect(find(await occ('2026-09'), 'Academia').expectedCents).toBe(10000);
+    const sep = find(await occ('2026-09'), 'Academia');
+    expect([sep.expectedCents, sep.dueDate]).toEqual([10000, '2026-09-10']);
   });
 });
 
@@ -108,7 +115,7 @@ describe('edição que recria os meses', () => {
     expect([moved.account.id, moved.invoice.referenceMonth]).toEqual([nu, '2026-12']);
   });
   it('mais parcelas a partir da 2ª: a data dela define a primeira', async () => {
-    await create({ description: 'Sofá', form: 'installment', amountCents: 90000, installments: 3, date: '2026-11-03', dueDate: '2026-11-05', method: 'boleto' });
+    await create({ description: 'Sofá', form: 'installment', amountCents: 90000, installments: 3, date: '2026-11-05', method: 'boleto' });
     const second = find(await occ('2026-12'), 'Sofá');
     const res = await edit(second, { installments: 4, dueDate: '2026-12-07', note: 'renegociado' });
     expect(res.statusCode).toBe(200);

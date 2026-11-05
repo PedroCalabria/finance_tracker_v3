@@ -1,11 +1,13 @@
 import { randomUUID } from 'node:crypto';
-import { and, asc, eq, gt, inArray, isNull, lte, sql } from 'drizzle-orm';
+import { and, asc, eq, gte, inArray, isNull, lte, sql } from 'drizzle-orm';
 import {
   addMonths,
-  addMonthsToDate,
   compareDates,
-  diffMonths,
+  dateInMonth,
+  firstInstallmentDue,
+  installmentDueDates,
   monthOf,
+  recurringRule,
   splitInstallments,
   type ISODate,
   type ItemCreateInput,
@@ -16,12 +18,12 @@ import {
 } from '@ff/shared';
 import type { DB, Tx } from '../db/client';
 import { accounts, items, occurrences, payments } from '../db/schema';
-import { badRequest, conflict, notFound } from '../http/errors';
+import { AppError, badRequest, conflict, notFound } from '../http/errors';
 import { getAccountChecked, getCategoryChecked } from './catalog';
 import type { Clock } from './clock';
 import { ensureInvoice, invoiceMonthFor } from './invoice-core';
 import { buildRows, getOccurrenceChecked, patchOccurrence, projectedRow } from './occurrences';
-import { ensureMaterialized, materializeProjection, parseProjectionId, projectionId, projectionsFor } from './projections';
+import { chargeMonthFor, ensureMaterialized, materializeProjection, parseProjectionId, projectionId, projectionsFor } from './projections';
 
 /**
  * Itens = regras de lançamento (ADR-0004). Criar um item grava suas ocorrências:
@@ -47,9 +49,9 @@ export async function createItem(db: DB, walletId: string, input: ItemCreateInpu
     const form = input.form;
     const [item] = await tx
       .insert(items)
-      .values({ walletId, ...ruleFields({ ...input, dueDate: input.dueDate ?? null }, account), createdBy: userId })
+      .values({ walletId, ...ruleFields(input, account), createdBy: userId })
       .returning();
-    await writeOccurrences(tx, walletId, item!, account, { amountCents: input.amountCents, installments: input.installments ?? null, date: input.date, dueDate: input.dueDate ?? null, note: input.note ?? null }, clock);
+    await writeOccurrences(tx, walletId, item!, account, { amountCents: input.amountCents, installments: input.installments ?? null, dueDate: input.dueDate ?? null, note: input.note ?? null }, clock);
 
     // "Já foi pago?" = sim: quita o que já venceu (fora do crédito) com o valor previsto.
     if (input.alreadyPaid && !credit) {
@@ -59,7 +61,7 @@ export async function createItem(db: DB, walletId: string, input: ItemCreateInpu
         // Única: paga na data informada. Parcelas/meses: só os que já venceram, na data do vencimento.
         const reference = o.dueDate ?? `${o.competenceMonth}-01`;
         if (form !== 'single' && compareDates(reference, clock.today) > 0) continue;
-        const paidAt = notAfterToday(form === 'single' ? input.date : reference);
+        const paidAt = notAfterToday(form === 'single' ? input.date! : reference);
         await tx.insert(payments).values({ walletId, occurrenceId: o.id, paidAt, amountCents: o.expectedCents, groupId: randomUUID(), paidBy: userId });
         await tx.update(occurrences).set({ status: 'paid' }).where(eq(occurrences.id, o.id));
       }
@@ -77,17 +79,28 @@ interface RuleInput {
   amountCents: number;
   installments?: number | null;
   variableAmount?: boolean;
-  date: ISODate;
-  /** Primeira "data p/ pagamento" (fora do crédito). */
-  dueDate: ISODate | null;
+  /** Única: data do cadastro. Parcelada: data da compra (crédito) ou da 1ª parcela (fora do crédito). */
+  date?: ISODate | null;
+  /** Única fora do crédito: data p/ pagamento. */
+  dueDate?: ISODate | null;
+  /** Recorrente: mês de início e dia (ADR-0004). */
+  startMonth?: Month | null;
+  day?: number | null;
 }
 
 /** Campos da regra a partir do que foi informado no cadastro (ou na edição que recria os meses). */
 function ruleFields(input: RuleInput, account: AccountRec | null) {
   const credit = input.method === 'credit';
   const form = input.form;
-  // Fora do crédito, a "data p/ pagamento" define o mês; sem ela, vale a data do cadastro.
-  const anchor = credit ? input.date : (input.dueDate ?? input.date);
+  let dates: { dueDay: number | null; entryDate: ISODate; startMonth: Month };
+  if (form === 'recurring') {
+    dates = recurringRule({ method: input.method, startMonth: input.startMonth!, day: input.day });
+  } else {
+    // Única fora do crédito: a "data p/ pagamento" define o mês; sem ela, vale a data.
+    // Parcelada fora do crédito: a data já é a da 1ª parcela. Crédito: a data da compra.
+    const anchor = form === 'single' && !credit ? (input.dueDate ?? input.date!) : input.date!;
+    dates = { dueDay: null, entryDate: input.date!, startMonth: monthOf(anchor) };
+  }
   return {
     type: input.type,
     form,
@@ -99,9 +112,7 @@ function ruleFields(input: RuleInput, account: AccountRec | null) {
     installments: form === 'installment' ? input.installments! : null,
     amountCents: form === 'installment' ? null : input.amountCents,
     variableAmount: form === 'recurring' ? !!input.variableAmount : false,
-    dueDay: form === 'recurring' && !credit && input.dueDate ? Number(input.dueDate.slice(8, 10)) : null,
-    entryDate: input.date,
-    startMonth: monthOf(anchor),
+    ...dates,
   };
 }
 
@@ -123,28 +134,29 @@ async function writeOccurrences(
   walletId: string,
   item: ItemRec,
   account: AccountRec | null,
-  input: { amountCents: number; installments: number | null; date: ISODate; dueDate: ISODate | null; note: string | null },
+  input: { amountCents: number; installments: number | null; dueDate: ISODate | null; note: string | null },
   clock: Clock,
 ): Promise<void> {
   const credit = item.method === 'credit';
   const planned: NewOcc[] = [];
   if (item.form === 'single') {
     if (credit) {
-      const inv = await ensureInvoice(tx, account!, await invoiceMonthFor(tx, account!, input.date));
+      const inv = await ensureInvoice(tx, account!, await invoiceMonthFor(tx, account!, item.entryDate));
       planned.push({ competenceMonth: inv.referenceMonth, installmentNumber: null, expectedCents: input.amountCents, dueDate: inv.dueDate, invoiceId: inv.id });
     } else {
-      planned.push({ competenceMonth: monthOf(input.dueDate ?? input.date), installmentNumber: null, expectedCents: input.amountCents, dueDate: input.dueDate, invoiceId: null });
+      planned.push({ competenceMonth: monthOf(input.dueDate ?? item.entryDate), installmentNumber: null, expectedCents: input.amountCents, dueDate: input.dueDate, invoiceId: null });
     }
   } else if (item.form === 'installment') {
     const parts = splitInstallments(input.amountCents, input.installments!);
-    const firstInvoiceMonth = credit ? await invoiceMonthFor(tx, account!, input.date) : null;
+    const firstInvoiceMonth = credit ? await invoiceMonthFor(tx, account!, item.entryDate) : null;
+    // Fora do crédito, a data do cadastro é a da 1ª parcela; as demais no mesmo dia dos meses seguintes.
+    const dues = credit ? [] : installmentDueDates(item.entryDate, parts.length);
     for (let k = 0; k < parts.length; k++) {
       if (credit) {
         const inv = await ensureInvoice(tx, account!, addMonths(firstInvoiceMonth!, k));
         planned.push({ competenceMonth: inv.referenceMonth, installmentNumber: k + 1, expectedCents: parts[k]!, dueDate: inv.dueDate, invoiceId: inv.id });
       } else {
-        const due = input.dueDate ? addMonthsToDate(input.dueDate, k) : null;
-        planned.push({ competenceMonth: due ? monthOf(due) : addMonths(monthOf(input.date), k), installmentNumber: k + 1, expectedCents: parts[k]!, dueDate: due, invoiceId: null });
+        planned.push({ competenceMonth: monthOf(dues[k]!), installmentNumber: k + 1, expectedCents: parts[k]!, dueDate: dues[k]!, invoiceId: null });
       }
     }
   }
@@ -270,7 +282,7 @@ export async function editItem(db: DB, walletId: string, id: string, input: Item
       credit !== wasCredit ||
       (credit && account!.id !== item.accountId) ||
       (input.form === 'installment' && (input.installments !== item.installments || input.amountCents !== item.totalCents)) ||
-      (input.date !== item.entryDate && (credit || input.form !== 'single'));
+      datesChanged(item, occ, input);
 
     if (structural) {
       await rebuild(tx, walletId, item, occ, account, input, clock);
@@ -278,17 +290,23 @@ export async function editItem(db: DB, walletId: string, id: string, input: Item
     }
 
     // Mudança simples: a regra muda no lugar; a linha aberta recebe o que é "deste mês".
-    const dueDate = credit ? occ.dueDate : (input.dueDate ?? null);
+    // Só a única fora do crédito tem data p/ pagamento própria aqui; na parcelada mudar a data é estrutural.
+    const singleDue = item.form === 'single' && !credit ? (input.dueDate ?? null) : occ.dueDate;
     const patch: Partial<ItemRec> = {
       description: input.description,
       categoryId: input.categoryId ?? null,
       method: input.method,
       accountId: account?.id ?? null,
-      entryDate: input.date,
     };
+    if (item.form === 'single' || (item.form === 'installment' && credit)) patch.entryDate = input.date!;
     if (item.form === 'recurring') patch.variableAmount = !!input.variableAmount;
-    // Numa recorrente, o dia da data p/ pagamento vale daqui em diante.
-    if (item.form === 'recurring' && !credit && dueDate !== occ.dueDate) patch.dueDay = dueDate ? Number(dueDate.slice(8, 10)) : null;
+    // Recorrente fora do crédito: o dia vale do mês aberto em diante.
+    const newDay = input.day ?? null;
+    const dayChanged = item.form === 'recurring' && !credit && newDay !== item.dueDay;
+    if (dayChanged) {
+      patch.dueDay = newDay;
+      patch.entryDate = dateInMonth(item.startMonth, newDay ?? 1);
+    }
     await tx
       .update(items)
       .set({ ...patch, version: sql`${items.version} + 1` })
@@ -297,14 +315,49 @@ export async function editItem(db: DB, walletId: string, id: string, input: Item
     const expected = item.form === 'installment' ? input.occurrenceCents : input.amountCents;
     const occPatch: Parameters<typeof patchOccurrence>[3] = {};
     if (expected !== undefined && expected !== occ.expectedCents) occPatch.expectedCents = expected;
-    if (!credit && dueDate !== occ.dueDate) occPatch.dueDate = dueDate;
+    if (item.form === 'single' && !credit && singleDue !== occ.dueDate) occPatch.dueDate = singleDue;
     if (input.note !== undefined && (input.note || null) !== occ.note) occPatch.note = input.note || null;
     // Única fora do crédito: o mês acompanha a data p/ pagamento (ou a data, sem ela).
-    const month = monthOf(dueDate ?? input.date);
-    if (item.form === 'single' && !credit && month !== occ.competenceMonth) occPatch.competenceMonth = month;
+    if (item.form === 'single' && !credit) {
+      const month = monthOf(singleDue ?? input.date!);
+      if (month !== occ.competenceMonth) occPatch.competenceMonth = month;
+    }
     if (Object.keys(occPatch).length) await patchOccurrence(tx, occ, { ...item, ...patch }, occPatch);
+    if (dayChanged) await applyDueDayFrom(tx, item.id, occ.competenceMonth, newDay);
     return getItemDetail(tx, walletId, item.id, clock);
   });
+}
+
+/**
+ * As datas mudaram a ponto de recriar os meses? (com a forma igual; mudar a forma já é estrutural)
+ * - recorrente: mês de início; no crédito, também o dia da cobrança (muda a fatura de cada mês);
+ * - parcelada fora do crédito: a data desta parcela (sem data antes e sem data agora não conta: cadastro antigo);
+ * - crédito (única ou parcelada): a data da compra.
+ */
+function datesChanged(item: ItemRec, occ: typeof occurrences.$inferSelect, input: ItemEditInput): boolean {
+  const credit = input.method === 'credit';
+  if (input.form === 'recurring') {
+    if (input.startMonth !== item.startMonth) return true;
+    return credit && input.day !== Number(item.entryDate.slice(8, 10));
+  }
+  if (input.form === 'installment' && !credit) return (input.dueDate ?? null) !== occ.dueDate;
+  return credit && input.date !== item.entryDate;
+}
+
+/** Recorrente: o dia novo vale para o mês aberto e para os seguintes já gravados, pendentes e sem pagamento. */
+async function applyDueDayFrom(tx: Tx, itemId: string, fromMonth: Month, day: number | null): Promise<void> {
+  const later = await tx.query.occurrences.findMany({
+    where: and(
+      eq(occurrences.itemId, itemId),
+      sql`${occurrences.competenceMonth} >= ${fromMonth}`,
+      eq(occurrences.status, 'pending'),
+      sql`not exists (select 1 from payments p where p.occurrence_id = ${occurrences.id})`,
+    ),
+  });
+  for (const o of later) {
+    const due = day ? dateInMonth(o.competenceMonth, day) : null;
+    if (due !== o.dueDate) await tx.update(occurrences).set({ dueDate: due, version: sql`${occurrences.version} + 1` }).where(eq(occurrences.id, o.id));
+  }
 }
 
 /** Recria os meses de um item com a regra nova, mantendo o id e as observações que ainda fazem sentido. */
@@ -337,18 +390,19 @@ async function rebuild(
     }
   }
 
-  // A linha aberta é a k-ésima da sequência antiga: a data p/ pagamento dela, k meses para trás, é a primeira.
-  // Se a forma mudou, ela vira a primeira da sequência nova.
-  const k =
-    input.form !== item.form
-      ? 0
-      : item.form === 'installment'
-      ? (occ.installmentNumber ?? 1) - 1
-      : item.form === 'recurring' && item.method !== 'credit'
-        ? Math.max(0, diffMonths(item.startMonth, occ.competenceMonth))
-        : 0;
   const credit = input.method === 'credit';
-  const firstDue = !credit && input.dueDate ? addMonthsToDate(input.dueDate, -k) : null;
+  // Parcelada fora do crédito: a data da linha aberta, recuada até a 1ª posição, é a da primeira.
+  // Se a forma mudou, a linha aberta vira a primeira. Sem data (cadastro antigo), vale a data anterior.
+  const position = input.form === item.form && item.form === 'installment' ? (occ.installmentNumber ?? 1) : 1;
+  const date =
+    input.form === 'installment' && !credit
+      ? input.dueDate
+        ? firstInstallmentDue(input.dueDate, position)
+        : (input.date ?? item.entryDate)
+      : (input.date ?? null);
+  const k = position - 1;
+  // Meses excluídos com "Só este mês" continuam excluídos (recorrente → recorrente).
+  const canceledMonths = input.form === 'recurring' && item.form === 'recurring' ? old.filter((o) => o.status === 'canceled').map((o) => o.competenceMonth) : [];
 
   // Observações antigas voltam para a mesma parcela (ou mês), se a forma não mudou.
   const keyOf = (o: { installmentNumber: number | null; competenceMonth: string }) => (o.installmentNumber ? `#${o.installmentNumber}` : o.competenceMonth);
@@ -358,13 +412,21 @@ async function rebuild(
   const [updated] = await tx
     .update(items)
     .set({
-      ...ruleFields({ ...input, dueDate: firstDue }, account),
+      ...ruleFields({ ...input, date, dueDate: input.form === 'single' ? input.dueDate : null }, account),
       endMonth: input.form === 'recurring' && item.form === 'recurring' ? item.endMonth : null,
       version: sql`${items.version} + 1`,
     })
     .where(eq(items.id, item.id))
     .returning();
-  await writeOccurrences(tx, walletId, updated!, account, { amountCents: input.amountCents, installments: input.installments ?? null, date: input.date, dueDate: firstDue, note: null }, clock);
+  await writeOccurrences(
+    tx,
+    walletId,
+    updated!,
+    account,
+    { amountCents: input.amountCents, installments: input.installments ?? null, dueDate: input.form === 'single' && !credit ? (input.dueDate ?? null) : null, note: null },
+    clock,
+  );
+  for (const m of canceledMonths) await cancelMonthIfPresent(tx, walletId, item.id, m, clock);
 
   const fresh = await tx.query.occurrences.findMany({ where: eq(occurrences.itemId, item.id) });
   for (const o of fresh) {
@@ -387,22 +449,62 @@ async function rebuild(
   }
 }
 
-/** Encerra uma recorrente: o último mês com ocorrência é `lastMonth`; as seguintes sem pagamento somem. */
-export async function endRecurring(db: DB, walletId: string, id: string, lastMonth: Month, clock: Clock): Promise<ItemDetail> {
+/** Reaplica "Só este mês" depois de recriar os meses, se o mês ainda existir na sequência nova. */
+async function cancelMonthIfPresent(tx: Tx, walletId: string, itemId: string, month: Month, clock: Clock): Promise<void> {
+  let id = (
+    await tx.query.occurrences.findFirst({
+      where: and(eq(occurrences.itemId, itemId), eq(occurrences.competenceMonth, month), isNull(occurrences.installmentNumber)),
+      columns: { id: true },
+    })
+  )?.id;
+  if (!id && month > clock.currentMonth) {
+    const slots = (await projectionsFor(tx, walletId, month, clock)).filter((p) => p.item.id === itemId);
+    if (slots.length) id = await materializeProjection(tx, walletId, projectionId(itemId, month), clock);
+  }
+  if (id) await tx.update(occurrences).set({ status: 'canceled' }).where(eq(occurrences.id, id));
+}
+
+/**
+ * "Este e os próximos" (ADR-0004): encerra a recorrência no mês de cobrança anterior
+ * ao da ocorrência escolhida (que pode ser projeção) e apaga os meses dali em diante.
+ * Recusa se houver pagamento, ou fatura não aberta, nesse mês ou depois. Na primeira
+ * ocorrência equivale a excluir toda a recorrência: devolve `null`.
+ */
+export async function endRecurringFrom(db: DB, walletId: string, id: string, occurrenceId: string, clock: Clock): Promise<ItemDetail | null> {
   return db.transaction(async (tx) => {
     const item = await getItemChecked(tx, walletId, id);
-    if (item.form !== 'recurring') throw badRequest('Só lançamentos recorrentes podem ser encerrados.');
-    if (lastMonth < addMonths(item.startMonth, -1)) throw badRequest('O encerramento precisa ser depois do início.');
-    await tx.update(items).set({ endMonth: lastMonth, version: sql`${items.version} + 1` }).where(eq(items.id, item.id));
+    if (item.form !== 'recurring') throw new AppError(400, 'not_recurring', 'Só lançamentos recorrentes podem ser encerrados.');
+    let month: Month;
+    const projected = parseProjectionId(occurrenceId);
+    if (projected) {
+      if (projected.itemId !== item.id) throw notFound('Lançamento');
+      month = projected.month;
+    } else {
+      const occ = await getOccurrenceChecked(tx, walletId, occurrenceId);
+      if (occ.itemId !== item.id) throw notFound('Lançamento');
+      month = occ.competenceMonth;
+    }
+
+    const later = await tx.query.occurrences.findMany({ where: and(eq(occurrences.itemId, item.id), gte(occurrences.competenceMonth, month)) });
+    if (later.length) {
+      const paid = await tx.query.payments.findFirst({ where: inArray(payments.occurrenceId, later.map((o) => o.id)), columns: { id: true } });
+      const invoiceIds = [...new Set(later.map((o) => o.invoiceId).filter((x): x is string => !!x))];
+      const closed = invoiceIds.length
+        ? await tx.query.invoices.findFirst({ where: (inv, { and: a, inArray: i, ne }) => a(i(inv.id, invoiceIds), ne(inv.status, 'open')), columns: { id: true } })
+        : undefined;
+      if (paid || closed) throw conflict('Há pagamento neste mês ou depois. Desfaça esses pagamentos antes de encerrar.', 'later_months_paid');
+    }
+
+    const charge = await chargeMonthFor(tx, item, month);
+    if (charge <= item.startMonth) {
+      await softDelete(tx, item);
+      return null;
+    }
     await tx
-      .delete(occurrences)
-      .where(
-        and(
-          eq(occurrences.itemId, item.id),
-          gt(occurrences.competenceMonth, lastMonth),
-          sql`not exists (select 1 from payments p where p.occurrence_id = ${occurrences.id})`,
-        ),
-      );
+      .update(items)
+      .set({ endMonth: addMonths(charge, -1), version: sql`${items.version} + 1` })
+      .where(eq(items.id, item.id));
+    await tx.delete(occurrences).where(and(eq(occurrences.itemId, item.id), gte(occurrences.competenceMonth, month)));
     return getItemDetail(tx, walletId, item.id, clock);
   });
 }
@@ -437,15 +539,26 @@ export async function deleteItem(db: DB, walletId: string, id: string): Promise<
   await db.transaction(async (tx) => {
     const item = await getItemChecked(tx, walletId, id);
     if (item.systemKind) throw badRequest('Esse lançamento é criado pela fatura. Desfaça o pagamento da fatura para removê-lo.');
-    const occs = await tx.query.occurrences.findMany({ where: eq(occurrences.itemId, item.id), columns: { invoiceId: true } });
-    const invoiceIds = [...new Set(occs.map((o) => o.invoiceId).filter((x): x is string => !!x))];
-    if (invoiceIds.length) {
-      const closed = await tx.query.invoices.findFirst({
-        where: (inv, { and: a, inArray: i, ne }) => a(i(inv.id, invoiceIds), ne(inv.status, 'open')),
-        columns: { id: true },
-      });
-      if (closed) throw conflict('Este lançamento está numa fatura já paga. Cancele as parcelas futuras em vez de excluir.');
-    }
-    await tx.update(items).set({ deletedAt: new Date(), version: sql`${items.version} + 1` }).where(eq(items.id, item.id));
+    await softDelete(tx, item);
   });
+}
+
+/** Exclusão lógica, recusada se alguma parte estiver numa fatura já paga. */
+async function softDelete(tx: Tx, item: ItemRec): Promise<void> {
+  const occs = await tx.query.occurrences.findMany({ where: eq(occurrences.itemId, item.id), columns: { invoiceId: true } });
+  const invoiceIds = [...new Set(occs.map((o) => o.invoiceId).filter((x): x is string => !!x))];
+  if (invoiceIds.length) {
+    const closed = await tx.query.invoices.findFirst({
+      where: (inv, { and: a, inArray: i, ne }) => a(i(inv.id, invoiceIds), ne(inv.status, 'open')),
+      columns: { id: true },
+    });
+    if (closed) {
+      throw conflict(
+        item.form === 'recurring'
+          ? 'Esta recorrência tem um mês numa fatura já paga. Use "Este e os próximos" num mês em aberto para encerrá-la.'
+          : 'Este lançamento está numa fatura já paga. Cancele as parcelas futuras em vez de excluir.',
+      );
+    }
+  }
+  await tx.update(items).set({ deletedAt: new Date(), version: sql`${items.version} + 1` }).where(eq(items.id, item.id));
 }

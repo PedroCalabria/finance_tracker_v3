@@ -57,6 +57,45 @@ describe('autenticação', () => {
     env.setNow('2026-11-03T15:00:00Z');
   });
 
+  it('sem o cookie de acesso (já apagado pelo navegador), o refresh válido devolve a sessão', async () => {
+    const c = await signedIn(env, 'gabi@example.com', 'Gabi');
+    // O cookie ff_access vence junto com o JWT: depois de 15 min o navegador nem o envia.
+    c.cookies.delete('ff_access');
+    const lost = await c.get('/api/me');
+    expect(lost.statusCode).toBe(401);
+    expect(lost.json().error.code).toBe('unauthorized');
+    expect((await c.post('/api/auth/refresh')).statusCode).toBe(200);
+    expect(c.cookies.has('ff_access')).toBe(true);
+    expect((await c.get('/api/me')).statusCode).toBe(200);
+  });
+
+  it('na corrida entre duas renovações, a perdedora não apaga os cookies da vencedora', async () => {
+    const c = await signedIn(env, 'hugo@example.com', 'Hugo');
+    const tabA = new Client(env.app);
+    const tabB = new Client(env.app);
+    for (const tab of [tabA, tabB]) tab.cookies = new Map(c.cookies);
+
+    // As duas abas renovam ao mesmo tempo com o mesmo refresh token.
+    const [ra, rb] = await Promise.all([tabA.post('/api/auth/refresh'), tabB.post('/api/auth/refresh')]);
+    const [win, lose, winner] = ra.statusCode === 200 ? [ra, rb, tabA] : [rb, ra, tabB];
+    expect(win.statusCode).toBe(200);
+    expect(lose.statusCode).toBe(401);
+    expect(lose.json().error.code).toBe('refresh_superseded');
+    expect(lose.cookies).toEqual([]);
+
+    // E em sequência, dentro da janela de 30 s: mesma resposta, sem revogar a família.
+    const late = new Client(env.app);
+    late.cookies = new Map(c.cookies);
+    const again = await late.post('/api/auth/refresh');
+    expect(again.json().error.code).toBe('refresh_superseded');
+    expect(again.cookies).toEqual([]);
+
+    // Os cookies da vencedora continuam valendo e renovam de novo.
+    expect((await winner.get('/api/me')).statusCode).toBe(200);
+    expect((await winner.post('/api/auth/refresh')).statusCode).toBe(200);
+    expect((await winner.get('/api/me')).statusCode).toBe(200);
+  });
+
   it('sair de todos os dispositivos derruba o access token na hora', async () => {
     const c = await signedIn(env, 'duda@example.com', 'Duda');
     const access = c.cookies.get('ff_access')!;

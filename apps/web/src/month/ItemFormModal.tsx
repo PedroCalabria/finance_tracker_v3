@@ -14,7 +14,7 @@ import {
   type Method,
   type OccurrenceRow,
 } from '@ff/shared';
-import { Button, Field, Modal, MoneyInput, Notice, Segmented, errorText, fieldErrors, useToast } from '../components/ui';
+import { Button, DayInput, Field, Modal, MoneyInput, MonthInput, Notice, Segmented, errorText, fieldErrors, useToast } from '../components/ui';
 import { ApiError, api } from '../lib/api';
 import { todayISO } from '../lib/hooks';
 import { invalidateFinance, useAccounts, useCategories, useInvoicePreview, walletUrl } from '../lib/queries';
@@ -44,13 +44,17 @@ const BANKS = ['Banco do Brasil', 'Bradesco', 'XP', 'Nubank', 'Itaú', 'Caixa', 
 const fieldError = (message: string, field: string) => Object.assign(new Error(message), { fields: { [field]: message } });
 
 /**
- * Cadastro e edição de despesa ou entrada (etapa 3, ADR-0004). Obrigatórios:
- * serviço, valor, data e método. No cadastro, "Já foi pago?" tem padrão pela
- * regra: única no pix/débito com data até hoje nasce paga; parcelas e
- * recorrentes começam como promessa. Nas entradas, a própria data é a do
- * recebimento (e do lembrete): não há "data p/ pagamento" separada.
- * Na edição, mudar tipo, forma, parcelas, total, cartão ou a data de parcelada/
- * recorrente recria os meses (o servidor recusa se já houver pagamento).
+ * Cadastro e edição de despesa ou entrada (etapa 3, ADR-0004). As datas dependem da forma:
+ * - única: "Data" (+ "Data p/ pagamento" opcional na despesa fora do crédito);
+ * - parcelada: no crédito, "Data da compra"; fora dele, uma só data, a da 1ª parcela
+ *   (na edição, a desta parcela);
+ * - recorrente: "Mês de início" + dia (do pagamento, opcional; do recebimento ou da
+ *   cobrança, obrigatório).
+ * No cadastro, "Já foi pago?" tem padrão pela regra: única no pix/débito com data até
+ * hoje nasce paga; parcelas e recorrentes começam como promessa. Nas entradas únicas, a
+ * própria data é a do recebimento (e do lembrete).
+ * Na edição, mudar tipo, forma, parcelas, total, cartão, o mês de início, o dia da
+ * cobrança ou a data de uma parcela recria os meses (o servidor recusa se já houver pagamento).
  */
 export function ItemFormModal(props: Props) {
   const { walletId, onClose } = props;
@@ -79,6 +83,15 @@ export function ItemFormModal(props: Props) {
   const [date, setDate] = useState(defaultDate);
   const [receipt, setReceipt] = useState(initialReceipt);
   const [dueDate, setDueDate] = useState(e && initialMethod !== 'credit' ? (e.row.dueDate ?? '') : '');
+  // Parcelada fora do crédito, na edição: a data p/ pagamento da parcela aberta.
+  // (Única que vira parcelada: começa pela data dela; parcelada antiga sem data continua vazia.)
+  const [parcelDue, setParcelDue] = useState(e && initialMethod !== 'credit' ? (e.row.dueDate ?? (e.item.form === 'single' ? e.item.entryDate : '')) : '');
+  // Recorrente: mês de início e dia (no crédito, o dia da cobrança fica na data de entrada).
+  const entryDay = e ? Number(e.item.entryDate.slice(8, 10)) : null;
+  const [startMonth, setStartMonth] = useState(e ? e.item.startMonth : props.month || props.currentMonth);
+  const [day, setDay] = useState<number | null>(
+    e ? (e.item.form === 'recurring' ? (e.item.method === 'credit' ? entryDay : e.item.dueDay) : e.row.dueDate && !e.row.invoice ? Number(e.row.dueDate.slice(8, 10)) : null) : null,
+  );
   const [method, setMethod] = useState<Method>(initialMethod);
   const [accountId, setAccountId] = useState(e?.item.accountId ?? '');
   const [categoryId, setCategoryId] = useState(e?.item.categoryId ?? '');
@@ -103,21 +116,44 @@ export function ItemFormModal(props: Props) {
   }, [accounts.data, credit, e]);
   const onlyCards = !credit && accountOptions.length === 0 && (accounts.data ?? []).some((a) => a.kind === 'credit_card');
   const catOptions: Category[] = (categories.data ?? []).filter((c) => c.type === type);
-  const preview = useInvoicePreview(walletId, credit && !newAccount ? accountId : null, date);
+  const recurring = form === 'recurring';
+  const nonCreditParcel = form === 'installment' && !credit;
+  // Na recorrente no crédito, a fatura do mês de início sai do dia da cobrança.
+  const previewDate = recurring ? (day ? dateInMonth(startMonth, day) : '') : date;
+  const preview = useInvoicePreview(walletId, credit && !newAccount && previewDate ? accountId : null, previewDate);
 
-  // O que vai para a API como "data" e "data p/ pagamento" (nas entradas, as duas vêm da data do recebimento).
+  // Única: "data" e "data p/ pagamento" (nas entradas, as duas vêm da data do recebimento).
   const typeOrFormChanged = !!e && (type !== e.item.type || form !== e.item.form);
-  const sentDate = income && e ? (form === 'single' || typeOrFormChanged ? receipt : e.item.entryDate) : date;
-  const sentDue = credit ? null : income ? (e ? receipt : date) : dueDate || null;
+  const singleDate = income && e ? receipt : date;
+  const singleDue = credit ? null : income ? (e ? receipt : date) : dueDate || null;
+  // O que vai para a API como datas, conforme a forma (ADR-0004).
+  const sentDates: Record<string, unknown> = recurring
+    ? { startMonth, day }
+    : nonCreditParcel
+      ? e
+        ? { dueDate: parcelDue || null }
+        : { date }
+      : form === 'single'
+        ? { date: singleDate, dueDate: singleDue }
+        : { date };
 
-  // Mudanças que recriam os meses (espelha `editItem` no servidor).
+  // Mudanças que recriam os meses (espelha `editItem`/`datesChanged` no servidor).
+  const datesChanged =
+    !!e &&
+    !typeOrFormChanged &&
+    (recurring
+      ? startMonth !== e.item.startMonth || (credit && day !== entryDay)
+      : nonCreditParcel
+        ? (parcelDue || null) !== (e.item.method === 'credit' ? null : e.row.dueDate)
+        : credit && date !== e.item.entryDate);
   const structural =
     !!e &&
     (typeOrFormChanged ||
       credit !== (e.item.method === 'credit') ||
       (credit && (newAccount !== null || accountId !== (e.item.accountId ?? ''))) ||
       (form === 'installment' && (Number(installments) !== e.item.installments || amount !== e.item.totalCents)) ||
-      (sentDate !== e.item.entryDate && (credit || form !== 'single')));
+      datesChanged);
+  const hasCanceledMonths = !!e && e.item.occurrences.some((o) => o.displayStatus === 'canceled');
   // Mesmas recusas do servidor, avisadas antes de salvar.
   const blocked = !e
     ? null
@@ -129,6 +165,8 @@ export function ItemFormModal(props: Props) {
         ? 'parte deste lançamento está numa fatura já paga. Cancele as parcelas futuras e cadastre de novo.'
         : null;
   const editingParcel = !!e && e.item.form === 'installment' && form === 'installment';
+  // Parcela aberta de uma parcelada que já era fora do crédito: a data é a desta parcela.
+  const editingParcelDate = editingParcel && e!.item.method !== 'credit';
 
   // Padrão do "Já foi pago?" até a pessoa mexer nele (só no cadastro).
   const suggestedPaid = form === 'single' && ['pix', 'debit', 'cash', 'transfer'].includes(method) && (income || !dueDate) && date <= today;
@@ -168,6 +206,10 @@ export function ItemFormModal(props: Props) {
     if (!description.trim()) return setErr(fieldError('Informe o serviço.', 'description'));
     if (!amount) return setErr(fieldError('Informe o valor.', 'amountCents'));
     if (editingParcel && !structural && !occAmount) return setErr(fieldError('Informe o valor da parcela.', 'occurrenceCents'));
+    if (recurring && !startMonth) return setErr(fieldError('Informe o mês de início.', 'startMonth'));
+    if (recurring && day == null && (credit || income)) return setErr(fieldError(credit ? 'Informe o dia da cobrança.' : 'Informe o dia do recebimento.', 'day'));
+    if (recurring && day != null && (day < 1 || day > 31)) return setErr(fieldError('Dia entre 1 e 31.', 'day'));
+    if (!recurring && !(nonCreditParcel && e) && !date && !(income && e && receipt)) return setErr(fieldError('Informe a data.', 'date'));
     setBusy(true);
     try {
       let catId = categoryId || null;
@@ -193,16 +235,15 @@ export function ItemFormModal(props: Props) {
         amountCents: amount,
         installments: form === 'installment' ? Number(installments) : undefined,
         variableAmount: form === 'recurring' ? variable : undefined,
-        date: sentDate,
         method,
         accountId: accId ?? undefined,
       };
       if (e) {
         await api.put(`${walletUrl(walletId)}/items/${e.item.id}`, {
           ...common,
+          ...sentDates,
           accountId: accId,
           categoryId: catId,
-          dueDate: sentDue,
           occurrenceId: e.row.id,
           occurrenceCents: editingParcel && occAmount ? occAmount : undefined,
           note: note.trim() || null,
@@ -212,7 +253,7 @@ export function ItemFormModal(props: Props) {
         await api.post(`${walletUrl(walletId)}/items`, {
           ...common,
           categoryId: catId ?? undefined,
-          dueDate: sentDue ?? undefined,
+          ...sentDates,
           alreadyPaid: credit ? undefined : alreadyPaid,
           note: note.trim() || undefined,
         });
@@ -228,21 +269,25 @@ export function ItemFormModal(props: Props) {
 
   const errFields = (err as { fields?: Record<string, string> } | null)?.fields ?? f;
   const dateLabel = credit ? 'Data da compra' : 'Data';
-  const dateHint = income && form === 'recurring' ? (e ? 'O dia vale daqui em diante.' : 'O dia vale para todos os meses.') : undefined;
   const dateValue = income && e ? receipt : date;
   const onDate = (v: string) => (income && e ? setReceipt(v) : setDate(v));
   const dateInput = (id: string) => <input id={id} type="date" className="ff-input ff-num" value={dateValue} onChange={(ev) => onDate(ev.target.value)} />;
   const amountLabel = form === 'installment' ? 'Valor total' : form === 'recurring' ? (e ? 'Valor do mês (vale daqui em diante)' : 'Valor do mês') : 'Valor';
-  const dueLabel =
-    form === 'recurring'
-      ? e
-        ? 'Data p/ pagamento (o dia vale daqui em diante)'
-        : 'Vencimento (o dia vale para todos os meses)'
-      : form === 'installment'
-        ? e && e.item.form === 'installment'
-          ? 'Data p/ pagamento desta parcela'
-          : 'Data p/ pagamento da 1ª parcela'
-        : 'Data p/ pagamento';
+  // Parcelada fora do crédito: uma só data, a da 1ª parcela (na edição, a desta parcela).
+  const parcelLabel = editingParcelDate
+    ? income
+      ? 'Data do recebimento desta parcela'
+      : 'Data p/ pagamento desta parcela'
+    : income
+      ? 'Data do recebimento da 1ª parcela'
+      : 'Data p/ pagamento da 1ª parcela';
+  const parcelValue = e ? parcelDue : date;
+  const onParcel = (v: string) => (e ? setParcelDue(v) : setDate(v));
+  // Recorrente: o dia muda de nome e de obrigatoriedade conforme o tipo e o método.
+  const dayLabel = credit ? 'Dia da cobrança' : income ? 'Dia do recebimento' : 'Dia para o pagamento';
+  const dayHint = credit
+    ? 'Define a fatura de cada mês. Nos meses mais curtos, vale o último dia.'
+    : `${e ? 'Vale deste mês em diante. ' : ''}${income ? '' : 'Sem dia, não há lembrete por email. '}Nos meses mais curtos, vale o último dia.`;
   const accountValue = newAccount ? '__new' : accountId;
 
   return (
@@ -305,17 +350,32 @@ export function ItemFormModal(props: Props) {
           <Field label="Número de parcelas" htmlFor="it-inst" error={errFields.installments}>
             <input id="it-inst" className="ff-input" inputMode="numeric" value={installments} onChange={(ev) => setInstallments(ev.target.value.replace(/\D/g, '').slice(0, 3))} />
           </Field>
+        ) : recurring ? (
+          <Field label="Mês de início" htmlFor="it-start" error={errFields.startMonth} hint={e ? 'Mudar o mês de início recria os meses.' : undefined}>
+            <MonthInput id="it-start" label="Mês de início" value={startMonth} onChange={setStartMonth} />
+          </Field>
         ) : (
-          <Field label={dateLabel} htmlFor="it-date" error={errFields.date ?? (income ? errFields.dueDate : undefined)} hint={dateHint}>
+          <Field label={dateLabel} htmlFor="it-date" error={errFields.date ?? (income ? errFields.dueDate : undefined)}>
             {dateInput('it-date')}
           </Field>
         )}
       </div>
+      {recurring && (
+        <Field label={dayLabel} optional={!credit && !income} htmlFor="it-day" error={errFields.day} hint={dayHint}>
+          <DayInput id="it-day" value={day} onChange={setDay} />
+        </Field>
+      )}
       {form === 'installment' && (
         <div className="app-grid2">
-          <Field label={dateLabel} htmlFor="it-date2" error={errFields.date ?? (income ? errFields.dueDate : undefined)}>
-            {dateInput('it-date2')}
-          </Field>
+          {credit ? (
+            <Field label={dateLabel} htmlFor="it-date2" error={errFields.date}>
+              {dateInput('it-date2')}
+            </Field>
+          ) : (
+            <Field label={parcelLabel} htmlFor="it-date2" error={errFields.date ?? errFields.dueDate} hint={editingParcelDate ? 'Mudar a data recalcula todas as parcelas.' : undefined}>
+              <input id="it-date2" type="date" className="ff-input ff-num" value={parcelValue} onChange={(ev) => onParcel(ev.target.value)} />
+            </Field>
+          )}
           {editingParcel && (
             <Field
               label={`Valor desta parcela (${e!.row.installmentLabel})`}
@@ -417,17 +477,13 @@ export function ItemFormModal(props: Props) {
         <Notice tone={blocked ? 'danger' : 'info'}>
           {blocked
             ? `Essa mudança recalcula todos os meses, mas ${blocked}`
-            : `Essa mudança recalcula todos os meses deste lançamento${credit || e!.item.method === 'credit' ? ' e as faturas' : ''}.`}
+            : `Essa mudança recalcula todos os meses deste lançamento${credit || e!.item.method === 'credit' ? ' e as faturas' : ''}.${
+                recurring && e!.item.form === 'recurring' && hasCanceledMonths ? ' Os meses excluídos continuam excluídos.' : ''
+              }`}
         </Notice>
       )}
-      {!credit && !income && (
-        <Field
-          label={dueLabel}
-          optional
-          htmlFor="it-due"
-          hint={form === 'recurring' ? 'Sem data, não há lembrete por email.' : 'Com data, você recebe o lembrete por email.'}
-          error={errFields.dueDate}
-        >
+      {form === 'single' && !credit && !income && (
+        <Field label="Data p/ pagamento" optional htmlFor="it-due" hint="Com data, você recebe o lembrete por email." error={errFields.dueDate}>
           <input id="it-due" type="date" className="ff-input ff-num" value={dueDate} onChange={(ev) => setDueDate(ev.target.value)} />
         </Field>
       )}

@@ -1,7 +1,8 @@
 import { createContext, useCallback, useContext, useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { centsToInput, formatDateBR, formatMonthShort, parseBRL, type DisplayStatus, type OccurrenceRow } from '@ff/shared';
+import { MONTH_NAMES, centsToInput, formatDateBR, formatMonthShort, parseBRL, type DisplayStatus, type OccurrenceRow } from '@ff/shared';
 import { ApiError } from '../lib/api';
+import { todayISO } from '../lib/hooks';
 import { Icon, type IconName } from './Icon';
 
 /** Componentes do design system em React (classes ff- de components.css). */
@@ -124,6 +125,57 @@ export function MoneyInput({ id, value, onChange, disabled, autoFocus }: { id?: 
         }}
       />
     </span>
+  );
+}
+
+/**
+ * Mês e ano em duas listas (ADR-0009): `<input type="month">` não funciona bem
+ * no Safari. O rótulo do Field aponta para a lista do mês (`id`); a do ano tem
+ * rótulo próprio. Valor `YYYY-MM`. Anos: 5 para trás e 5 para a frente do atual,
+ * sempre incluindo o do valor.
+ */
+export function MonthInput({ id, value, onChange, label }: { id: string; value: string; onChange: (month: string) => void; label: string }) {
+  const thisYear = Number(todayISO().slice(0, 4));
+  const year = Number(value.slice(0, 4)) || thisYear;
+  const month = value.slice(5, 7) || '01';
+  const from = Math.min(year, thisYear - 5);
+  const to = Math.max(year, thisYear + 5);
+  const years = Array.from({ length: to - from + 1 }, (_, i) => from + i);
+  return (
+    <span className="app-monthpick" role="group" aria-label={label}>
+      <select id={id} className="ff-select" value={month} onChange={(e) => onChange(`${year}-${e.target.value}`)} aria-label={`${label}: mês`}>
+        {MONTH_NAMES.map((name, i) => (
+          <option key={name} value={String(i + 1).padStart(2, '0')}>
+            {name.charAt(0).toUpperCase() + name.slice(1)}
+          </option>
+        ))}
+      </select>
+      <select className="ff-select ff-num" value={year} onChange={(e) => onChange(`${e.target.value}-${month}`)} aria-label={`${label}: ano`}>
+        {years.map((y) => (
+          <option key={y} value={y}>
+            {y}
+          </option>
+        ))}
+      </select>
+    </span>
+  );
+}
+
+/** Dia do mês (1–31), só números. Vazio = sem dia. */
+export function DayInput({ id, value, onChange }: { id: string; value: number | null; onChange: (day: number | null) => void }) {
+  return (
+    <input
+      id={id}
+      className="ff-input ff-num app-day"
+      inputMode="numeric"
+      autoComplete="off"
+      placeholder="Ex.: 10"
+      value={value ?? ''}
+      onChange={(e) => {
+        const digits = e.target.value.replace(/\D/g, '').slice(0, 2);
+        onChange(digits ? Number(digits) : null);
+      }}
+    />
   );
 }
 

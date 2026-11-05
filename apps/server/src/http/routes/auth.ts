@@ -3,7 +3,7 @@ import { emailOnlyInput, loginInput, registerInput, resetPasswordInput, tokenInp
 import * as auth from '../../auth/service';
 import type { AppContext } from '../../context';
 import { REFRESH_COOKIE, clearSessionCookies, makeRequireUser, setSessionCookies } from '../auth-plugin';
-import { parse } from '../errors';
+import { AppError, parse } from '../errors';
 
 export async function authRoutes(app: FastifyInstance, ctx: AppContext): Promise<void> {
   const requireUser = makeRequireUser(ctx);
@@ -38,7 +38,8 @@ export async function authRoutes(app: FastifyInstance, ctx: AppContext): Promise
       setSessionCookies(ctx, reply, s);
       return reply.send({ ok: true });
     } catch (e) {
-      clearSessionCookies(ctx, reply);
+      // Na corrida entre abas os cookies já são os novos (da aba vencedora): não apagar.
+      if (!(e instanceof AppError && e.code === 'refresh_superseded')) clearSessionCookies(ctx, reply);
       throw e;
     }
   });

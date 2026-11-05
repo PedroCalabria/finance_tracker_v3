@@ -41,6 +41,37 @@ export const accountUpdate = z.object({
   dueDay: day.optional(),
 });
 
+/**
+ * Datas do lançamento conforme a forma (ADR-0004), conferidas nos dois lados:
+ * - recorrente: `startMonth` + `day` (dia obrigatório na entrada e no crédito); sem `date`/`dueDate`;
+ * - única e parcelada: `date` (na parcelada fora do crédito, a data da 1ª parcela); sem `startMonth`/`day`.
+ */
+interface DatesShape {
+  type: (typeof ITEM_TYPES)[number];
+  form: (typeof ITEM_FORMS)[number];
+  method: (typeof METHODS)[number];
+  date?: string | null;
+  dueDate?: string | null;
+  startMonth?: string | null;
+  day?: number | null;
+}
+function checkDates(i: DatesShape, ctx: z.RefinementCtx, mode: 'create' | 'edit'): void {
+  const issue = (path: string, message: string) => ctx.addIssue({ code: z.ZodIssueCode.custom, path: [path], message });
+  if (i.form === 'recurring') {
+    if (!i.startMonth) issue('startMonth', 'Informe o mês de início.');
+    if (i.day == null && i.method === 'credit') issue('day', 'Informe o dia da cobrança.');
+    else if (i.day == null && i.type === 'income') issue('day', 'Informe o dia do recebimento.');
+    if (i.date != null) issue('date', 'Recorrentes usam mês de início e dia, não data.');
+    if (i.dueDate != null) issue('dueDate', 'Recorrentes usam mês de início e dia, não data.');
+    return;
+  }
+  if (i.startMonth != null) issue('startMonth', 'Só recorrentes têm mês de início.');
+  if (i.day != null) issue('day', 'Só recorrentes têm dia fixo.');
+  // Na edição de parcelada fora do crédito vale a data desta parcela (`dueDate`); `date` pode faltar.
+  const datelessEdit = mode === 'edit' && i.form === 'installment' && i.method !== 'credit';
+  if (!i.date && !datelessEdit) issue('date', 'Informe a data.');
+}
+
 export const itemCreateInput = z
   .object({
     type: z.enum(ITEM_TYPES),
@@ -53,13 +84,18 @@ export const itemCreateInput = z
     amountCents: positiveCents,
     installments: z.number().int().min(2).max(120).nullish(),
     variableAmount: z.boolean().optional(),
-    /** "Data" obrigatória do cadastro (compra ou lançamento). */
-    date: isoDate,
-    /** "Data p/ pagamento", opcional. Ignorada no crédito (vem da fatura). */
+    /** Única: "Data" do cadastro. Parcelada: data da compra (crédito) ou da 1ª parcela (fora do crédito). */
+    date: isoDate.nullish(),
+    /** Única fora do crédito: "Data p/ pagamento", opcional. Ignorada nas outras formas. */
     dueDate: isoDate.nullish(),
+    /** Recorrente: mês da primeira ocorrência (no crédito, da primeira cobrança). */
+    startMonth: month.nullish(),
+    /** Recorrente: dia do pagamento/recebimento (fora do crédito) ou da cobrança (crédito). */
+    day: z.number({ invalid_type_error: 'Dia entre 1 e 31.' }).int('Dia entre 1 e 31.').min(1, 'Dia entre 1 e 31.').max(31, 'Dia entre 1 e 31.').nullish(),
     alreadyPaid: z.boolean().optional(),
     note: z.string().trim().max(500).nullish(),
   })
+  .superRefine((i, ctx) => checkDates(i, ctx, 'create'))
   .refine((i) => i.form !== 'installment' || (i.installments ?? 0) >= 2, { message: 'Informe o número de parcelas.', path: ['installments'] })
   .refine((i) => i.method !== 'credit' || i.type === 'expense', { message: 'Crédito só vale para despesas.', path: ['method'] })
   .refine((i) => i.method !== 'credit' || !!i.accountId, { message: 'Escolha o cartão.', path: ['accountId'] });
@@ -96,17 +132,24 @@ export const itemEditInput = z
     /** Parcelada: valor desta parcela (ignorado se o total ou o número de parcelas mudar). */
     occurrenceCents: positiveCents.optional(),
     variableAmount: z.boolean().optional(),
-    date: isoDate,
-    /** Data p/ pagamento DESTE mês. Ignorada no crédito. */
+    /** Única: data do cadastro. Parcelada no crédito: data da compra. Ignorada na parcelada fora do crédito. */
+    date: isoDate.nullish(),
+    /** Data p/ pagamento DESTE mês (única) ou DESTA parcela (parcelada). Ignorada no crédito e nas recorrentes. */
     dueDate: isoDate.nullish(),
+    /** Recorrente: mês de início (mudar recria os meses). */
+    startMonth: month.nullish(),
+    /** Recorrente: dia; fora do crédito vale do mês aberto em diante. */
+    day: z.number({ invalid_type_error: 'Dia entre 1 e 31.' }).int('Dia entre 1 e 31.').min(1, 'Dia entre 1 e 31.').max(31, 'Dia entre 1 e 31.').nullish(),
     note: z.string().trim().max(500).nullish(),
     version: z.number().int().optional(),
   })
+  .superRefine((i, ctx) => checkDates(i, ctx, 'edit'))
   .refine((i) => i.form !== 'installment' || (i.installments ?? 0) >= 2, { message: 'Informe o número de parcelas.', path: ['installments'] })
   .refine((i) => i.method !== 'credit' || i.type === 'expense', { message: 'Crédito só vale para despesas.', path: ['method'] })
   .refine((i) => i.method !== 'credit' || !!i.accountId, { message: 'Escolha o cartão.', path: ['accountId'] });
 
-export const itemEndInput = z.object({ lastMonth: month });
+/** "Este e os próximos": encerra a recorrência antes da ocorrência escolhida (pode ser projeção). */
+export const itemEndInput = z.object({ occurrenceId: z.string().min(1).max(80) });
 
 export const occurrenceUpdateInput = z.object({
   expectedCents: positiveCents.optional(),

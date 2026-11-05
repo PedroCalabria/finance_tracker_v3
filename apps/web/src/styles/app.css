@@ -131,3 +131,40 @@ textarea.ff-input { min-height: 88px; padding-top: var(--space-2); padding-botto
 .app-list-row__main p { margin: 0; }
 .app-inline-form { display: flex; gap: var(--space-3); align-items: flex-end; flex-wrap: wrap; padding: var(--space-4) var(--space-5); border-top: 1px solid var(--border); }
 .app-inline-form .ff-field { flex: 1 1 200px; }
+
+/* ---------- Importação de extrato e fatura (ADR-0010) */
+.app-import-card { padding: var(--space-4) var(--space-5); display: flex; flex-direction: column; gap: var(--space-3); }
+.app-dropzone { min-height: 140px; cursor: pointer; text-align: center; padding: var(--space-4); }
+.app-dropzone:hover { border-color: var(--primary); color: var(--ink); }
+.app-dropzone:focus-within { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.app-import-password { display: flex; flex-direction: column; gap: var(--space-3); max-width: 360px; }
+.app-import-totals { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-4); }
+.app-import-totals > .ff-card { padding: var(--space-3) var(--space-4); }
+.app-import-total { margin: 0; font-size: 24px; line-height: 32px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.app-import-table { table-layout: fixed; width: 100%; }
+.app-import-table th:nth-child(1) { width: 88px; }
+.app-import-table td:first-child { white-space: nowrap; overflow-wrap: normal; }
+.app-import-table th:nth-child(3) { width: 140px; }
+.app-import-table th:nth-child(4) { width: 44%; }
+.app-import-table td { vertical-align: top; white-space: normal; overflow-wrap: anywhere; }
+.app-import-table tr.is-pending td, .app-import-row.is-pending { background: var(--warning-bg); box-shadow: inset 3px 0 0 var(--warning-ink); }
+.app-import-decision { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; width: 100%; }
+.app-import-create { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--space-2); }
+.app-import-create > input { grid-column: 1 / -1; }
+.app-import-warn { color: var(--warning-ink); }
+.app-import-in { color: var(--amount-in); }
+.app-import-details > summary { cursor: pointer; list-style: none; display: flex; justify-content: space-between; align-items: center; }
+.app-import-details > summary::-webkit-details-marker { display: none; }
+.app-import-list { margin: 0; padding: var(--space-2) var(--space-5) var(--space-4); list-style: none; display: flex; flex-direction: column; gap: var(--space-1); font-size: 14px; }
+.app-import-hint { padding: 0 var(--space-5) var(--space-4); margin: 0; }
+.app-import-confirm { display: flex; align-items: center; justify-content: flex-end; gap: var(--space-3); flex-wrap: wrap; }
+.app-block { display: block; }
+@media (max-width: 1023px) {
+  .app-import-row .ff-occ__foot { display: block; }
+  .app-import-create { grid-template-columns: 1fr; }
+}
+@media (max-width: 767px) {
+  .app-import-totals { grid-template-columns: 1fr; }
+  .app-import-confirm { justify-content: stretch; }
+  .app-import-confirm .ff-btn { width: 100%; }
+}

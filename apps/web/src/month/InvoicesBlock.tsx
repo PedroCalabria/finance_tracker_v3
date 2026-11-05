@@ -120,7 +120,11 @@ function InvoicePayModal({ walletId, inv, onClose }: { walletId: string; inv: In
         </dd>
       </dl>
       <div className="app-grid2">
-        <Field label="Valor da fatura (do banco)" htmlFor="inv-real" hint="Confira no app ou no boleto do banco.">
+        <Field
+          label="Valor da fatura (do banco)"
+          htmlFor="inv-real"
+          hint={inv.status === 'open' && inv.realAmountCents != null ? 'Valor da fatura importada.' : 'Confira no app ou no boleto do banco.'}
+        >
           <MoneyInput id="inv-real" value={real} onChange={setReal} autoFocus />
         </Field>
         <Field label="Valor pago" htmlFor="inv-paid">

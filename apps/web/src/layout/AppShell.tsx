@@ -63,7 +63,10 @@ function Sidebar({ me }: { me: Me }) {
     <aside className="ff-sidebar" aria-label="Menu principal">
       <p className="ff-wordmark">Finanças da Família</p>
       <p className="ff-nav__section">Menu principal</p>
-      <ul className="ff-nav">{item('/', 'dashboard', 'Visão do mês')}</ul>
+      <ul className="ff-nav">
+        {item('/', 'dashboard', 'Visão do mês')}
+        {item('/importar', 'upload', 'Importar')}
+      </ul>
       <p className="ff-nav__section">Cadastros</p>
       <ul className="ff-nav">
         {item('/categorias', 'tag', 'Categorias')}

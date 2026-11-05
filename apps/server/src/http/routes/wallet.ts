@@ -5,6 +5,8 @@ import {
   accountUpdate,
   categoryInput,
   categoryUpdate,
+  importConfirmInput,
+  importSuggestInput,
   invoicePaymentInput,
   invoiceUpdateInput,
   isoDate,
@@ -27,11 +29,14 @@ import * as catalog from '../../domain/catalog';
 import { clockAt, type Clock } from '../../domain/clock';
 import * as invoicesSvc from '../../domain/invoices';
 import * as itemsSvc from '../../domain/items';
+import * as importConfirmSvc from '../../domain/imports/confirm';
+import * as importSuggestSvc from '../../domain/imports/suggest';
+import { MAX_IMPORT_BYTES } from '../../imports/read-file';
 import * as occSvc from '../../domain/occurrences';
 import * as paymentsSvc from '../../domain/payments';
 import * as summarySvc from '../../domain/summary';
 import { makeRequireUser, makeRequireWallet } from '../auth-plugin';
-import { badRequest, notFound, parse } from '../errors';
+import { AppError, badRequest, notFound, parse } from '../errors';
 
 /** Rotas de uma carteira: tudo sob /api/wallets/:walletId (ADR-0002). */
 export async function walletRoutes(app: FastifyInstance, ctx: AppContext): Promise<void> {
@@ -134,6 +139,31 @@ export async function walletRoutes(app: FastifyInstance, ctx: AppContext): Promi
       await invoicesSvc.deleteInvoicePayment(ctx.db, req.walletId, req.params.id);
       return reply.status(204).send();
     });
+
+    // ---- Importação de extratos e faturas (ADR-0010). O arquivo fica só em memória.
+    r.post<P>(`${W}/imports/preview`, { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (req) => {
+      const tooLarge = () => new AppError(413, 'file_too_large', 'O arquivo passa de 10 MB.');
+      let file: Buffer | null = null;
+      let password: string | undefined;
+      // A senha (se houver) é usada só em memória e nunca registrada.
+      for await (const part of req.parts({ limits: { fileSize: MAX_IMPORT_BYTES, files: 1, fields: 3, fieldSize: 1024 } })) {
+        if (part.type === 'file') {
+          file = await part.toBuffer().catch(() => {
+            throw tooLarge();
+          });
+          if (part.file.truncated) throw tooLarge();
+        } else if (part.fieldname === 'password' && typeof part.value === 'string') {
+          password = part.value;
+        }
+      }
+      if (!file) throw new AppError(400, 'import_unsupported_file', 'Escolha o arquivo do extrato ou da fatura.');
+      return importSuggestSvc.previewImport(ctx, req.walletId, req.userId, file, password, await clock(req));
+    });
+    r.post<P>(`${W}/imports/suggest`, async (req) => {
+      const { token, accountId } = parse(importSuggestInput, req.body);
+      return importSuggestSvc.suggestImport(ctx, req.walletId, req.userId, token, accountId, await clock(req));
+    });
+    r.post<P>(`${W}/imports/confirm`, async (req) => importConfirmSvc.confirmImport(ctx, req.walletId, req.userId, parse(importConfirmInput, req.body), await clock(req)));
 
     // ---- Comprovantes
     const uploadOne = async (req: FastifyRequest) => {

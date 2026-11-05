@@ -1,6 +1,6 @@
 # Progresso da implementação
 
-Atualizado em 04/11/2026. Fase 1 da especificação implementada; o que falta para colocar no ar depende de contas e chaves que só o dono do projeto pode criar.
+Atualizado em 05/11/2026. Fase 1 da especificação implementada; o que falta para colocar no ar depende de contas e chaves que só o dono do projeto pode criar.
 
 ## Etapas da fase 1
 | # | Etapa | Estado | Onde |
@@ -14,8 +14,13 @@ Atualizado em 04/11/2026. Fase 1 da especificação implementada; o que falta pa
 | 7 | Notificações: worker horário, resumo diário, calendário bancário | Pronta | `jobs/daily-summary.ts`, `main-worker.ts` |
 | 8 | Operação: imagem, Compose, backup cifrado, alerta, restauração | Pronta (scripts) | `Dockerfile`, `docker-compose.yml`, `scripts/`, `docs/operacao.md` |
 
+## Fase 2
+| Etapa | Estado | Onde |
+| --- | --- | --- |
+| Importação de extrato e fatura com conciliação: extrato e fatura Ourocard do BB em PDF, OFX de conta | Pronta | `packages/shared/src/imports/`, `apps/server/src/{imports,domain/imports}/`, `pages/ImportPage`, ADR-0010 |
+
 ## Verificação
-- 37 testes unitários (`packages/shared`) + 77 de integração (`apps/server/test`): autenticação (inclusive renovação sem o cookie de acesso e corrida entre abas), cadastros, edição de lançamentos, parcelas, recorrentes e projeções, exclusão de recorrente por alcance, pagamentos, faturas, resumo, concorrência, comprovantes (EXIF, cifragem, tipos), avisos (horário, fuso, dia útil, feriado, idempotência).
+- 60 testes unitários (`packages/shared`) + 96 de integração (`apps/server/test`): leitores de importação (fixtures anonimizadas), autenticação (inclusive renovação sem o cookie de acesso e corrida entre abas), cadastros, edição de lançamentos, parcelas, recorrentes e projeções, exclusão de recorrente por alcance, importação e conciliação (extrato, fatura, senha, reimportação), pagamentos, faturas, resumo, concorrência, comprovantes (EXIF, cifragem, tipos), avisos (horário, fuso, dia útil, feriado, idempotência).
 - Roteiro completo no navegador em 1440px, 1920px, 900px e celular, claro e escuro.
 - Passos do Dockerfile reproduzidos numa cópia limpa (o ambiente de desenvolvimento não tinha Docker).
 
@@ -29,7 +34,7 @@ Atualizado em 04/11/2026. Fase 1 da especificação implementada; o que falta pa
 - [ ] Sincronizar `content-max = 1440px` de volta no artifact Design System (ADR-0009)
 
 ## Fora da fase 1 (decidido na especificação)
-- Fase 2: importação de extrato OFX/CSV com tela de conciliação.
+- Fase 2: importação de extrato com conciliação — **entregue** para BB (PDF) e OFX (ADR-0010); CSV fica para depois.
 - Futuro: carteira familiar compartilhada (modelo pronto: `wallet_members`, `paid_by`, `version`), histórico de alterações, 2FA, WhatsApp.
 
 ## Ajustes depois da fase 1 (04/11/2026)
@@ -44,5 +49,5 @@ Atualizado em 04/11/2026. Fase 1 da especificação implementada; o que falta pa
 
 ## Observações para as próximas etapas
 - **Carteira familiar:** criar `POST /wallets`, convites (`/wallets/:id/invites`, `/invites/:token/accept`) e um seletor de carteira na interface; as rotas financeiras já são por carteira. O resumo diário já percorre todas as carteiras da pessoa.
-- **Importação (fase 2):** reutilizar `createItem` e `addPayment`; o pagamento de fatura no extrato deve casar com a fatura (`payInvoice`), nunca virar despesa.
+- **Importação (ADR-0010):** banco novo = leitor novo em `packages/shared/src/imports/readers/` + entrada em `READERS` + fixture anonimizada (`npx tsx scripts/anonymize-import-fixture.ts <pdf> <saida.json>`, que só sabe anonimizar BB; para outro banco, adaptar). PDFs reais ficam em `docs/bank-docs-examples/` (fora do git e da imagem). Pendente: CSV, outros bancos, OFX de cartão, desfazer um lote, tela de histórico das importações e mostrar a numeração original das parcelas importadas.
 - **Telas não feitas por não estarem no escopo:** troca de email/senha logada, exclusão de conta.

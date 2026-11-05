@@ -47,6 +47,11 @@ export function dateInMonth(month: Month, day: number): ISODate {
   return `${month}-${String(d).padStart(2, '0')}`;
 }
 
+/** Dias de `from` até `to` (negativo se `to` vem antes). */
+export function daysBetween(from: ISODate, to: ISODate): number {
+  return Math.round((parseISO(to).getTime() - parseISO(from).getTime()) / 86_400_000);
+}
+
 export function addDays(date: ISODate, n: number): ISODate {
   const d = parseISO(date);
   d.setUTCDate(d.getUTCDate() + n);

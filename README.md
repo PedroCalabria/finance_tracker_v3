@@ -39,7 +39,7 @@ docker compose exec db psql -U financas -c "create database financas_test"
 TEST_DATABASE_URL=postgres://financas:financas@localhost:5432/financas_test npm test
 npm run typecheck
 ```
-São 60 testes de regras puras e 96 de integração (API inteira contra o Postgres, com o relógio fixo em 03/11/2026).
+São 60 testes de regras puras e 97 de integração (API inteira contra o Postgres, com o relógio fixo em 03/11/2026).
 
 ## Comandos
 | Comando | O que faz |

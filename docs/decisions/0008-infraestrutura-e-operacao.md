@@ -3,7 +3,7 @@
 **Status:** aceita · 03/11/2026 · arquivos: `Dockerfile`, `docker-compose.yml`, `scripts/backup.sh`, `scripts/restore.sh`, `docs/operacao.md`
 
 ## Decisão
-- **Uma imagem** (Node 22, Debian slim) com API, interface compilada e worker; o comando escolhe o papel. A API aplica as migrações ao subir (e o worker também, idempotente).
+- **Uma imagem** (Node 22, Debian slim) com API, interface compilada e worker; o comando escolhe o papel. A API aplica as migrações ao subir (e o worker também, idempotente). Como os dois sobem juntos, as migrações rodam sob um *advisory lock* do Postgres (`db/migrate.ts`): o segundo processo espera e encontra tudo aplicado. Sem a trava, os dois tentavam o mesmo `CREATE TABLE` e um caía (visto no deploy da migração 0001).
 - **Docker Compose na VPS existente**: `db` (Postgres 16, volume próprio, porta só em `127.0.0.1`), `app` (porta `127.0.0.1:3000`) e `worker`, com limites de memória para conviver com os outros projetos. O **CloudPanel** faz o proxy HTTPS para `127.0.0.1:3000` (site do tipo "Reverse Proxy").
 - `TRUST_PROXY=true` e cookies `Secure` em produção.
 - **Comprovantes no Cloudflare R2** (bucket privado, chave com acesso só a ele).

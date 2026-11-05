@@ -20,7 +20,7 @@ Atualizado em 05/11/2026. Fase 1 da especificação implementada; o que falta pa
 | Importação de extrato e fatura com conciliação: extrato e fatura Ourocard do BB em PDF, OFX de conta | Pronta | `packages/shared/src/imports/`, `apps/server/src/{imports,domain/imports}/`, `pages/ImportPage`, ADR-0010 |
 
 ## Verificação
-- 60 testes unitários (`packages/shared`) + 96 de integração (`apps/server/test`): leitores de importação (fixtures anonimizadas), autenticação (inclusive renovação sem o cookie de acesso e corrida entre abas), cadastros, edição de lançamentos, parcelas, recorrentes e projeções, exclusão de recorrente por alcance, importação e conciliação (extrato, fatura, senha, reimportação), pagamentos, faturas, resumo, concorrência, comprovantes (EXIF, cifragem, tipos), avisos (horário, fuso, dia útil, feriado, idempotência).
+- 60 testes unitários (`packages/shared`) + 97 de integração (`apps/server/test`): migrações simultâneas (API e worker), leitores de importação (fixtures anonimizadas), autenticação (inclusive renovação sem o cookie de acesso e corrida entre abas), cadastros, edição de lançamentos, parcelas, recorrentes e projeções, exclusão de recorrente por alcance, importação e conciliação (extrato, fatura, senha, reimportação), pagamentos, faturas, resumo, concorrência, comprovantes (EXIF, cifragem, tipos), avisos (horário, fuso, dia útil, feriado, idempotência).
 - Roteiro completo no navegador em 1440px, 1920px, 900px e celular, claro e escuro.
 - Passos do Dockerfile reproduzidos numa cópia limpa (o ambiente de desenvolvimento não tinha Docker).
 

@@ -15,5 +15,6 @@ Ao mudar uma regra, atualize o ADR correspondente (ou crie um novo que o substit
 | [0007](0007-notificacoes.md) | Worker pg-boss horário, resumo diário idempotente, calendário bancário calculado | 7 |
 | [0008](0008-infraestrutura-e-operacao.md) | Uma imagem Docker, Compose na VPS, backup cifrado com retenção | 8 |
 | [0009](0009-interface.md) | Design system no código, tabela responsiva, cache de dados, tema | 3, 6 |
+| [0010](0010-importacao.md) | Importação de extrato e fatura (PDF do BB e OFX), leitura local, prévia assinada, conciliação, impressão digital | fase 2 |
 
 O estado de cada etapa e as pendências estão em [`../PROGRESS.md`](../PROGRESS.md).

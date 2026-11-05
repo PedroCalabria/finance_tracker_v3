@@ -6,6 +6,7 @@ import {
   date,
   index,
   integer,
+  jsonb,
   pgTable,
   primaryKey,
   smallint,
@@ -116,6 +117,8 @@ export const accounts = pgTable(
     kind: text('kind', { enum: ['account', 'credit_card'] }).notNull(),
     closingDay: smallint('closing_day'),
     dueDay: smallint('due_day'),
+    /** Hash da conta ou do cartão de origem nas importações (ADR-0010): pré-seleciona o destino. */
+    importKey: text('import_key'),
     archivedAt: timestamp('archived_at', { withTimezone: true }),
     version: version(),
     createdAt: createdAt(),
@@ -279,4 +282,59 @@ export const notificationLog = pgTable(
     itemCount: integer('item_count').notNull().default(0),
   },
   (t) => [primaryKey({ columns: [t.userId, t.day, t.kind] })],
+);
+
+/**
+ * Importação confirmada de extrato ou fatura (ADR-0010). Não guarda o arquivo
+ * nem linhas não confirmadas: só a origem, o destino, o período e as contagens.
+ */
+export const importBatches = pgTable(
+  'import_batches',
+  {
+    id: id(),
+    walletId: uuid('wallet_id').notNull().references(() => wallets.id, { onDelete: 'cascade' }),
+    accountId: uuid('account_id').notNull().references(() => accounts.id, { onDelete: 'cascade' }),
+    readerId: text('reader_id').notNull(),
+    kind: text('kind', { enum: ['statement', 'invoice'] }).notNull(),
+    periodStart: dateCol('period_start'),
+    periodEnd: dateCol('period_end'),
+    invoiceId: uuid('invoice_id').references(() => invoices.id, { onDelete: 'set null' }),
+    counts: jsonb('counts').$type<Record<string, number>>().notNull(),
+    createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: createdAt(),
+  },
+  (t) => [index('import_batches_wallet_idx').on(t.walletId, t.createdAt)],
+);
+
+/**
+ * Linha confirmada (inclusive ignorada) com a impressão digital que impede
+ * duplicar numa reimportação, e o vínculo com o que ela gerou ou casou.
+ */
+export const importLines = pgTable(
+  'import_lines',
+  {
+    id: id(),
+    walletId: uuid('wallet_id').notNull().references(() => wallets.id, { onDelete: 'cascade' }),
+    batchId: uuid('batch_id').notNull().references(() => importBatches.id, { onDelete: 'cascade' }),
+    accountId: uuid('account_id').notNull().references(() => accounts.id, { onDelete: 'cascade' }),
+    fingerprint: char('fingerprint', { length: 64 }).notNull(),
+    lineDate: dateCol('line_date').notNull(),
+    amountCents: integer('amount_cents').notNull(),
+    direction: text('direction', { enum: ['credit', 'debit'] }).notNull(),
+    /** Como veio do banco, com CPF/CNPJ mascarados. */
+    description: text('description').notNull(),
+    document: text('document'),
+    action: text('action', { enum: ['paid', 'linked', 'created', 'invoice_paid', 'ignored'] }).notNull(),
+    occurrenceId: uuid('occurrence_id').references(() => occurrences.id, { onDelete: 'set null' }),
+    paymentId: uuid('payment_id').references(() => payments.id, { onDelete: 'set null' }),
+    invoiceId: uuid('invoice_id').references(() => invoices.id, { onDelete: 'set null' }),
+    invoicePaymentId: uuid('invoice_payment_id').references(() => invoicePayments.id, { onDelete: 'set null' }),
+    itemId: uuid('item_id').references(() => items.id, { onDelete: 'set null' }),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex('import_lines_fingerprint_uq').on(t.walletId, t.accountId, t.fingerprint),
+    index('import_lines_payment_idx').on(t.paymentId),
+    index('import_lines_occurrence_idx').on(t.occurrenceId),
+  ],
 );

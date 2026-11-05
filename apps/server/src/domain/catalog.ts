@@ -18,7 +18,7 @@ const toAccount = (a: typeof accounts.$inferSelect): Account => ({
 });
 
 /** O Drizzle embrulha o erro do Postgres em `cause`. */
-function isUniqueViolation(e: unknown): boolean {
+export function isUniqueViolation(e: unknown): boolean {
   for (let cur: unknown = e; cur && typeof cur === 'object'; cur = (cur as { cause?: unknown }).cause) {
     if ((cur as { code?: string }).code === '23505') return true;
   }

@@ -7,3 +7,7 @@ storage
 backups
 *.bundle
 *.log
+# Extratos e faturas reais e chaves: nunca no contexto da imagem
+docs/bank-docs-examples
+*.key
+.claude

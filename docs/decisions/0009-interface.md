@@ -17,6 +17,13 @@
 - **Datas do lançamento por forma (ADR-0004):** a recorrente tem "Mês de início" + "Dia para o pagamento" (opcional; "Sem dia, não há lembrete por email"), "Dia do recebimento" ou "Dia da cobrança" (obrigatórios), sem "Data" e sem "Vencimento"; a parcelada fora do crédito tem um só campo, "Data p/ pagamento da 1ª parcela" ("Data do recebimento da 1ª parcela" na entrada; "… desta parcela" na edição); no crédito, "Data da compra".
 - **Um formulário para cadastrar e editar:** `ItemFormModal` serve aos dois; ao clicar numa linha ele abre preenchido, com status, pagamentos e ações (cancelar parcelas, mover de fatura, excluir). Quando a mudança vai recriar os meses, um aviso diz isso antes de salvar (e diz por que não dá, se já houver pagamento). Linhas criadas pela fatura só editam a observação.
 - **Excluir recorrente:** `DeleteRecurringDialog` pergunta o alcance com três opções (rádios em `fieldset`, classe `app-choice`): "Só este mês", "Este e os próximos" e "Toda a recorrência", cada uma com uma frase do que acontece; nenhuma vem marcada e "Excluir" fica desabilitado até escolher; "Toda a recorrência" avisa que os meses pagos também somem. Erros do servidor ficam no diálogo. Substitui o antigo "Encerrar a partir deste mês". Nas **linhas previstas**, a ação "Excluir" também aparece (as outras ações continuam escondidas).
+- **Importar (ADR-0010):** item "Importar" no menu principal (`/importar`).
+  - **Passos:** arquivo (arrastar ou escolher; senha do PDF quando pedida), destino pré-selecionado e conciliação agrupada por sugestão, com totais (a importar, ignoradas, já conciliadas).
+  - **Cada linha:** controle de ação e alvo, perguntas ("Só este mês"/"Daqui em diante", "Quitado com desconto"/"Pagamento parcial") e, ao criar, descrição, categoria e método editáveis.
+  - **Na fatura:** resumo do total do banco × itens do app e "Usar as datas do banco".
+  - **Confirmar:** fica desabilitado até responder as perguntas.
+  - **Layout:** a partir de 1024px é tabela com layout fixo e quebra de linha; abaixo disso, cards.
+  - **Na memória:** arquivo, senha e prévia nunca vão para o `localStorage`.
 - **Cadastro rápido nos seletores:** "+ Nova categoria" e "+ Nova conta"/"+ Novo cartão" no fim das listas do lançamento; a conta é criada ao salvar e passa a valer em Contas e cartões. Fora do crédito só aparecem contas; se a pessoa só tem cartões, o campo explica.
 - **Seletor de mês:** "Voltar para o mês atual" fica **à esquerda** do seletor, para o seletor não mudar de lugar quando o atalho aparece.
 - **Acessibilidade:** foco preso nos modais (Esc fecha, foco volta a quem abriu), `aria-current` no menu, `aria-sort` nos cabeçalhos, `aria-expanded` no expandir, selos com texto, contraste AA nos dois temas.

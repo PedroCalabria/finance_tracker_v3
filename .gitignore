@@ -15,3 +15,6 @@ apps/web/src/styles/tokens.css
 *.bundle
 # Chave privada do backup (age): nunca no repositório.
 *.key
+
+# Extratos e faturas reais (dados bancários): nunca no git
+docs/bank-docs-examples/

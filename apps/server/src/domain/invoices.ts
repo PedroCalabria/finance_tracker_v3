@@ -36,7 +36,7 @@ export async function previewInvoice(tx: Tx, walletId: string, accountId: string
 }
 
 /** Soma dos itens de uma fatura (ocorrências não canceladas, ajuste incluído). */
-async function itemsSum(tx: Tx, invoiceId: string): Promise<{ cents: number; count: number }> {
+export async function itemsSum(tx: Tx, invoiceId: string): Promise<{ cents: number; count: number }> {
   const [r] = await tx
     .select({ cents: sql<number>`coalesce(sum(${occurrences.expectedCents}), 0)::int`, count: sql<number>`count(*)::int` })
     .from(occurrences)
@@ -176,39 +176,42 @@ async function syncAdjustment(tx: Tx, inv: InvoiceRec, realAmountCents: number, 
 }
 
 export async function payInvoice(db: DB, walletId: string, invoiceId: string, input: InvoicePaymentInput, userId: string, clock: Clock): Promise<InvoiceRow> {
-  return db.transaction(async (tx) => {
-    const inv = await getInvoiceChecked(tx, walletId, invoiceId);
-    if (inv.status !== 'open') {
-      throw new AppError(409, 'invoice_closed', inv.status === 'paid' ? 'Esta fatura já está paga.' : 'Esta fatura foi encerrada e o saldo foi para a próxima.');
-    }
-    if (input.realAmountCents < 0) throw badRequest('O valor da fatura não pode ser negativo.');
-    await syncAdjustment(tx, inv, input.realAmountCents, userId);
-    const [pay] = await tx
-      .insert(invoicePayments)
-      .values({ walletId, invoiceId: inv.id, paidAt: input.paidAt, amountCents: input.amountCents, paidBy: userId })
-      .returning();
-    if (input.attachmentIds?.length) await linkAttachments(tx, walletId, input.attachmentIds, { invoicePaymentId: pay!.id });
+  return db.transaction((tx) => payInvoiceTx(tx, walletId, invoiceId, input, userId, clock));
+}
 
-    const total = input.realAmountCents;
-    const paid = await paidSum(tx, inv.id);
-    let status: InvoiceRec['status'] = 'paid';
-    let carriedTo: string | null = null;
-    if (paid < total) {
-      // Parcialmente paga: o restante vira item na fatura seguinte e esta é encerrada.
-      const account = (await tx.query.accounts.findFirst({ where: eq(accounts.id, inv.accountId) }))!;
-      const next = await ensureInvoice(tx, account, addMonths(inv.referenceMonth, 1));
-      const label = `Saldo restante da fatura ${formatMonthShort(inv.referenceMonth, true)} · ${account.name}`;
-      await createSystemItem(tx, next, 'invoice_carryover', label, total - paid, inv.id, userId);
-      status = 'carried';
-      carriedTo = next.id;
-    }
-    const [updated] = await tx
-      .update(invoices)
-      .set({ realAmountCents: total, status, carriedToInvoiceId: carriedTo, version: sql`${invoices.version} + 1` })
-      .where(eq(invoices.id, inv.id))
-      .returning();
-    return toInvoiceRow(tx, updated!, clock);
-  });
+/** Mesma regra de `payInvoice`, dentro de uma transação já aberta (importação, ADR-0010). */
+export async function payInvoiceTx(tx: Tx, walletId: string, invoiceId: string, input: InvoicePaymentInput, userId: string, clock: Clock): Promise<InvoiceRow> {
+  const inv = await getInvoiceChecked(tx, walletId, invoiceId);
+  if (inv.status !== 'open') {
+    throw new AppError(409, 'invoice_closed', inv.status === 'paid' ? 'Esta fatura já está paga.' : 'Esta fatura foi encerrada e o saldo foi para a próxima.');
+  }
+  if (input.realAmountCents < 0) throw badRequest('O valor da fatura não pode ser negativo.');
+  await syncAdjustment(tx, inv, input.realAmountCents, userId);
+  const [pay] = await tx
+    .insert(invoicePayments)
+    .values({ walletId, invoiceId: inv.id, paidAt: input.paidAt, amountCents: input.amountCents, paidBy: userId })
+    .returning();
+  if (input.attachmentIds?.length) await linkAttachments(tx, walletId, input.attachmentIds, { invoicePaymentId: pay!.id });
+
+  const total = input.realAmountCents;
+  const paid = await paidSum(tx, inv.id);
+  let status: InvoiceRec['status'] = 'paid';
+  let carriedTo: string | null = null;
+  if (paid < total) {
+    // Parcialmente paga: o restante vira item na fatura seguinte e esta é encerrada.
+    const account = (await tx.query.accounts.findFirst({ where: eq(accounts.id, inv.accountId) }))!;
+    const next = await ensureInvoice(tx, account, addMonths(inv.referenceMonth, 1));
+    const label = `Saldo restante da fatura ${formatMonthShort(inv.referenceMonth, true)} · ${account.name}`;
+    await createSystemItem(tx, next, 'invoice_carryover', label, total - paid, inv.id, userId);
+    status = 'carried';
+    carriedTo = next.id;
+  }
+  const [updated] = await tx
+    .update(invoices)
+    .set({ realAmountCents: total, status, carriedToInvoiceId: carriedTo, version: sql`${invoices.version} + 1` })
+    .where(eq(invoices.id, inv.id))
+    .returning();
+  return toInvoiceRow(tx, updated!, clock);
 }
 
 /** Desfazer um pagamento de fatura reabre a fatura e remove o saldo transferido. */
@@ -244,17 +247,20 @@ export async function updateInvoicePaymentDate(db: DB, walletId: string, payment
 
 /** Ajusta fechamento e vencimento só deste mês; os itens da fatura acompanham o vencimento. */
 export async function updateInvoiceDates(db: DB, walletId: string, invoiceId: string, closingDate: ISODate, dueDate: ISODate, clock: Clock): Promise<InvoiceRow> {
+  return db.transaction((tx) => updateInvoiceDatesTx(tx, walletId, invoiceId, closingDate, dueDate, clock));
+}
+
+/** Mesma regra de `updateInvoiceDates`, dentro de uma transação já aberta (importação, ADR-0010). */
+export async function updateInvoiceDatesTx(tx: Tx, walletId: string, invoiceId: string, closingDate: ISODate, dueDate: ISODate, clock: Clock): Promise<InvoiceRow> {
   if (compareDates(closingDate, dueDate) >= 0) throw badRequest('O fechamento precisa ser antes do vencimento.');
-  return db.transaction(async (tx) => {
-    const inv = await getInvoiceChecked(tx, walletId, invoiceId);
-    const [u] = await tx
-      .update(invoices)
-      .set({ closingDate, dueDate, version: sql`${invoices.version} + 1` })
-      .where(eq(invoices.id, inv.id))
-      .returning();
-    await tx.update(occurrences).set({ dueDate }).where(eq(occurrences.invoiceId, inv.id));
-    return toInvoiceRow(tx, u!, clock);
-  });
+  const inv = await getInvoiceChecked(tx, walletId, invoiceId);
+  const [u] = await tx
+    .update(invoices)
+    .set({ closingDate, dueDate, version: sql`${invoices.version} + 1` })
+    .where(eq(invoices.id, inv.id))
+    .returning();
+  await tx.update(occurrences).set({ dueDate }).where(eq(occurrences.invoiceId, inv.id));
+  return toInvoiceRow(tx, u!, clock);
 }
 
 /** Mover um item para outra fatura do mesmo cartão (quando o banco considerou diferente). */

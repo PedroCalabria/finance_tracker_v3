@@ -20,4 +20,6 @@
 
 ## Consequências
 - Faturas vazias são criadas ao abrir o mês (uma por cartão ativo), mas só aparecem com itens ou pagamentos.
-- A importação de extrato (fase 2) deve conciliar o pagamento da fatura com a fatura, não lançá-lo como despesa.
+- A importação (ADR-0010) concilia o pagamento da fatura com a fatura (`payInvoice`), nunca como despesa.
+- **Valor real antes do pagamento:** importar a fatura do banco grava o total em `real_amount_cents` da fatura aberta, sem pagá-la. O pagamento vem com esse valor preenchido ("Valor da fatura importada"), e o "Ajuste da fatura" continua nascendo no pagamento.
+- **Datas do banco:** a importação pode ajustar fechamento e vencimento daquele mês, como o "ajustar" manual.

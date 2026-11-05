@@ -42,32 +42,50 @@ interface NewOcc {
 }
 
 export async function createItem(db: DB, walletId: string, input: ItemCreateInput, userId: string, clock: Clock): Promise<ItemDetail> {
-  return db.transaction(async (tx) => {
-    await getCategoryChecked(tx, walletId, input.categoryId, input.type);
-    const account = await accountForMethod(tx, walletId, input.method, input.accountId);
-    const credit = input.method === 'credit';
-    const form = input.form;
-    const [item] = await tx
-      .insert(items)
-      .values({ walletId, ...ruleFields(input, account), createdBy: userId })
-      .returning();
-    await writeOccurrences(tx, walletId, item!, account, { amountCents: input.amountCents, installments: input.installments ?? null, dueDate: input.dueDate ?? null, note: input.note ?? null }, clock);
+  return db.transaction((tx) => createItemTx(tx, walletId, input, userId, clock));
+}
 
-    // "Já foi pago?" = sim: quita o que já venceu (fora do crédito) com o valor previsto.
-    if (input.alreadyPaid && !credit) {
-      const occs = await tx.query.occurrences.findMany({ where: eq(occurrences.itemId, item!.id) });
-      const notAfterToday = (d: ISODate) => (compareDates(d, clock.today) > 0 ? clock.today : d);
-      for (const o of occs) {
-        // Única: paga na data informada. Parcelas/meses: só os que já venceram, na data do vencimento.
-        const reference = o.dueDate ?? `${o.competenceMonth}-01`;
-        if (form !== 'single' && compareDates(reference, clock.today) > 0) continue;
-        const paidAt = notAfterToday(form === 'single' ? input.date! : reference);
-        await tx.insert(payments).values({ walletId, occurrenceId: o.id, paidAt, amountCents: o.expectedCents, groupId: randomUUID(), paidBy: userId });
-        await tx.update(occurrences).set({ status: 'paid' }).where(eq(occurrences.id, o.id));
-      }
+/** Mesma regra de `createItem`, dentro de uma transação já aberta (importação, ADR-0010). */
+export async function createItemTx(
+  tx: Tx,
+  walletId: string,
+  input: ItemCreateInput,
+  userId: string,
+  clock: Clock,
+  /** Uso interno (importação de fatura): a 1ª ocorrência no crédito vai para esta fatura, seja qual for a regra compra × fechamento. */
+  opts: { invoiceMonth?: Month } = {},
+): Promise<ItemDetail> {
+  await getCategoryChecked(tx, walletId, input.categoryId, input.type);
+  const account = await accountForMethod(tx, walletId, input.method, input.accountId);
+  const credit = input.method === 'credit';
+  const form = input.form;
+  const [item] = await tx
+    .insert(items)
+    .values({ walletId, ...ruleFields(input, account), createdBy: userId })
+    .returning();
+  await writeOccurrences(
+    tx,
+    walletId,
+    item!,
+    account,
+    { amountCents: input.amountCents, installments: input.installments ?? null, dueDate: input.dueDate ?? null, note: input.note ?? null, invoiceMonth: opts.invoiceMonth },
+    clock,
+  );
+
+  // "Já foi pago?" = sim: quita o que já venceu (fora do crédito) com o valor previsto.
+  if (input.alreadyPaid && !credit) {
+    const occs = await tx.query.occurrences.findMany({ where: eq(occurrences.itemId, item!.id) });
+    const notAfterToday = (d: ISODate) => (compareDates(d, clock.today) > 0 ? clock.today : d);
+    for (const o of occs) {
+      // Única: paga na data informada. Parcelas/meses: só os que já venceram, na data do vencimento.
+      const reference = o.dueDate ?? `${o.competenceMonth}-01`;
+      if (form !== 'single' && compareDates(reference, clock.today) > 0) continue;
+      const paidAt = notAfterToday(form === 'single' ? input.date! : reference);
+      await tx.insert(payments).values({ walletId, occurrenceId: o.id, paidAt, amountCents: o.expectedCents, groupId: randomUUID(), paidBy: userId });
+      await tx.update(occurrences).set({ status: 'paid' }).where(eq(occurrences.id, o.id));
     }
-    return getItemDetail(tx, walletId, item!.id, clock);
-  });
+  }
+  return getItemDetail(tx, walletId, item!.id, clock);
 }
 
 interface RuleInput {
@@ -134,21 +152,21 @@ async function writeOccurrences(
   walletId: string,
   item: ItemRec,
   account: AccountRec | null,
-  input: { amountCents: number; installments: number | null; dueDate: ISODate | null; note: string | null },
+  input: { amountCents: number; installments: number | null; dueDate: ISODate | null; note: string | null; invoiceMonth?: Month },
   clock: Clock,
 ): Promise<void> {
   const credit = item.method === 'credit';
   const planned: NewOcc[] = [];
   if (item.form === 'single') {
     if (credit) {
-      const inv = await ensureInvoice(tx, account!, await invoiceMonthFor(tx, account!, item.entryDate));
+      const inv = await ensureInvoice(tx, account!, input.invoiceMonth ?? (await invoiceMonthFor(tx, account!, item.entryDate)));
       planned.push({ competenceMonth: inv.referenceMonth, installmentNumber: null, expectedCents: input.amountCents, dueDate: inv.dueDate, invoiceId: inv.id });
     } else {
       planned.push({ competenceMonth: monthOf(input.dueDate ?? item.entryDate), installmentNumber: null, expectedCents: input.amountCents, dueDate: input.dueDate, invoiceId: null });
     }
   } else if (item.form === 'installment') {
     const parts = splitInstallments(input.amountCents, input.installments!);
-    const firstInvoiceMonth = credit ? await invoiceMonthFor(tx, account!, item.entryDate) : null;
+    const firstInvoiceMonth = credit ? (input.invoiceMonth ?? (await invoiceMonthFor(tx, account!, item.entryDate))) : null;
     // Fora do crédito, a data do cadastro é a da 1ª parcela; as demais no mesmo dia dos meses seguintes.
     const dues = credit ? [] : installmentDueDates(item.entryDate, parts.length);
     for (let k = 0; k < parts.length; k++) {

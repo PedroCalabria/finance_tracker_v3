@@ -274,6 +274,11 @@ export async function patchOccurrence(
   occ: OccRec,
   item: ItemRec,
   input: { expectedCents?: number; dueDate?: string | null; note?: string | null; competenceMonth?: Month },
+  /**
+   * `forward` (padrão): numa recorrente, o valor novo vira a regra dali em diante.
+   * `occurrence`: muda só este mês (importação: "só este mês", ADR-0010).
+   */
+  opts: { ruleScope?: 'forward' | 'occurrence' } = {},
 ): Promise<void> {
   const patch: Partial<OccRec> = {};
   if (input.expectedCents !== undefined) patch.expectedCents = input.expectedCents;
@@ -284,7 +289,7 @@ export async function patchOccurrence(
     .update(occurrences)
     .set({ ...patch, version: sql`${occurrences.version} + 1` })
     .where(eq(occurrences.id, occ.id));
-  if (input.expectedCents !== undefined && item.form === 'recurring') {
+  if (input.expectedCents !== undefined && item.form === 'recurring' && opts.ruleScope !== 'occurrence') {
     await tx.update(items).set({ amountCents: input.expectedCents, version: sql`${items.version} + 1` }).where(eq(items.id, item.id));
     // Meses seguintes já gravados e sem pagamento acompanham o novo valor.
     await tx

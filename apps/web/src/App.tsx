@@ -7,6 +7,7 @@ import { setSessionLostHandler } from './lib/api';
 import { queryClient, useMe } from './lib/queries';
 import { MonthPage } from './month/MonthPage';
 import { AccountsPage } from './pages/AccountsPage';
+import { ImportPage } from './pages/ImportPage';
 import { CategoriesPage } from './pages/CategoriesPage';
 import { SettingsPage } from './pages/SettingsPage';
 
@@ -43,6 +44,7 @@ function Protected() {
     <AppShell me={me.data}>
       <Routes>
         <Route path="/" element={<MonthPage walletId={walletId} />} />
+        <Route path="/importar" element={<ImportPage walletId={walletId} />} />
         <Route path="/categorias" element={<CategoriesPage walletId={walletId} />} />
         <Route path="/contas" element={<AccountsPage walletId={walletId} />} />
         <Route path="/configuracoes" element={<SettingsPage me={me.data} />} />

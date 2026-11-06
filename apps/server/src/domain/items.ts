@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { and, asc, eq, gte, inArray, isNull, lte, sql } from 'drizzle-orm';
+import { and, asc, eq, gte, inArray, isNull, lte, notInArray, sql } from 'drizzle-orm';
 import {
   addMonths,
   compareDates,
@@ -7,6 +7,7 @@ import {
   firstInstallmentDue,
   installmentDueDates,
   monthOf,
+  paidTargets,
   recurringRule,
   splitInstallments,
   type ISODate,
@@ -15,6 +16,7 @@ import {
   type ItemEditInput,
   type ItemUpdateInput,
   type Month,
+  type NewSequence,
 } from '@ff/shared';
 import type { DB, Tx } from '../db/client';
 import { accounts, items, occurrences, payments } from '../db/schema';
@@ -22,7 +24,7 @@ import { AppError, badRequest, conflict, notFound } from '../http/errors';
 import { getAccountChecked, getCategoryChecked } from './catalog';
 import type { Clock } from './clock';
 import { ensureInvoice, invoiceMonthFor } from './invoice-core';
-import { buildRows, getOccurrenceChecked, patchOccurrence, projectedRow } from './occurrences';
+import { buildRows, getOccurrenceChecked, patchOccurrence, projectedRow, refreshStatus } from './occurrences';
 import { chargeMonthFor, ensureMaterialized, materializeProjection, parseProjectionId, projectionId, projectionsFor } from './projections';
 
 /**
@@ -154,6 +156,11 @@ async function writeOccurrences(
   account: AccountRec | null,
   input: { amountCents: number; installments: number | null; dueDate: ISODate | null; note: string | null; invoiceMonth?: Month },
   clock: Clock,
+  /**
+   * Edição estrutural (única/parcelada): diz quais linhas planejadas reaproveitam uma
+   * ocorrência paga já existente (índice → id). Essas são atualizadas, não inseridas.
+   */
+  reuse?: (planned: NewOcc[]) => Map<number, string>,
 ): Promise<void> {
   const credit = item.method === 'credit';
   const planned: NewOcc[] = [];
@@ -179,7 +186,17 @@ async function writeOccurrences(
     }
   }
   if (planned.length) {
-    await tx.insert(occurrences).values(planned.map((p, i) => ({ walletId, itemId: item.id, ...p, note: i === 0 ? input.note : null })));
+    const reused = reuse ? reuse(planned) : new Map<number, string>();
+    // Primeiro as reaproveitadas (saem da posição antiga), depois as novas: sem colisão nos índices únicos.
+    for (const [i, occurrenceId] of reused) {
+      const p = planned[i]!;
+      await tx
+        .update(occurrences)
+        .set({ ...p, version: sql`${occurrences.version} + 1` })
+        .where(eq(occurrences.id, occurrenceId));
+    }
+    const rows = planned.map((p, i) => ({ walletId, itemId: item.id, ...p, note: i === 0 ? input.note : null })).filter((_, i) => !reused.has(i));
+    if (rows.length) await tx.insert(occurrences).values(rows);
   }
   if (item.form === 'recurring') {
     await ensureMaterialized(tx, walletId, clock);
@@ -378,7 +395,11 @@ async function applyDueDayFrom(tx: Tx, itemId: string, fromMonth: Month, day: nu
   }
 }
 
-/** Recria os meses de um item com a regra nova, mantendo o id e as observações que ainda fazem sentido. */
+/**
+ * Recria os meses de um item com a regra nova, mantendo o id e as observações que ainda fazem sentido.
+ * Ocorrências com pagamento não são apagadas: ficam (mesmo id, com pagamentos, comprovantes e
+ * vínculos de importação) e vão para o lugar equivalente da sequência nova (`paidTargets`).
+ */
 async function rebuild(
   tx: Tx,
   walletId: string,
@@ -389,15 +410,11 @@ async function rebuild(
   clock: Clock,
 ): Promise<void> {
   const old = await tx.query.occurrences.findMany({ where: eq(occurrences.itemId, item.id) });
+  let kept: typeof old = [];
   if (old.length) {
-    const paid = await tx.query.payments.findFirst({ where: inArray(payments.occurrenceId, old.map((o) => o.id)), columns: { id: true } });
-    if (paid) {
-      throw conflict(
-        item.form === 'recurring'
-          ? 'Essa mudança recalcula todos os meses, mas este lançamento já tem meses pagos. Encerre a recorrência e cadastre de novo.'
-          : 'Essa mudança recalcula todos os meses, mas este lançamento já tem pagamento registrado. Desfaça o pagamento antes ou cadastre de novo.',
-      );
-    }
+    const paidRows = await tx.query.payments.findMany({ where: inArray(payments.occurrenceId, old.map((o) => o.id)), columns: { occurrenceId: true } });
+    const paidIds = new Set(paidRows.map((p) => p.occurrenceId));
+    kept = old.filter((o) => paidIds.has(o.id));
     const invoiceIds = [...new Set(old.map((o) => o.invoiceId).filter((x): x is string => !!x))];
     if (invoiceIds.length) {
       const closed = await tx.query.invoices.findFirst({
@@ -409,6 +426,16 @@ async function rebuild(
   }
 
   const credit = input.method === 'credit';
+  const keptIds = new Set(kept.map((o) => o.id));
+  const paidSlots = kept.map((o) => ({ competenceMonth: o.competenceMonth, installmentNumber: o.installmentNumber }));
+  const targetsFor = (to: NewSequence) => {
+    const r = paidTargets({ fromForm: item.form, typeChanged: input.type !== item.type, toCredit: credit, paid: paidSlots, to });
+    if (!r.ok) throw conflict(r.message, 'payments_not_movable');
+    return r.targets;
+  };
+  // Troca de tipo e crédito recusam qualquer que seja a forma: confere antes de mexer em algo.
+  if (kept.length && (input.type !== item.type || credit)) targetsFor({ form: 'single' });
+
   // Parcelada fora do crédito: a data da linha aberta, recuada até a 1ª posição, é a da primeira.
   // Se a forma mudou, a linha aberta vira a primeira. Sem data (cadastro antigo), vale a data anterior.
   const position = input.form === item.form && item.form === 'installment' ? (occ.installmentNumber ?? 1) : 1;
@@ -424,9 +451,10 @@ async function rebuild(
 
   // Observações antigas voltam para a mesma parcela (ou mês), se a forma não mudou.
   const keyOf = (o: { installmentNumber: number | null; competenceMonth: string }) => (o.installmentNumber ? `#${o.installmentNumber}` : o.competenceMonth);
-  const notes = new Map(input.form === item.form ? old.filter((o) => o.note && o.id !== occ.id).map((o) => [keyOf(o), o.note!] as const) : []);
+  // (As ocorrências preservadas guardam a própria observação.)
+  const notes = new Map(input.form === item.form ? old.filter((o) => o.note && o.id !== occ.id && !keptIds.has(o.id)).map((o) => [keyOf(o), o.note!] as const) : []);
 
-  await tx.delete(occurrences).where(eq(occurrences.itemId, item.id));
+  await tx.delete(occurrences).where(and(eq(occurrences.itemId, item.id), kept.length ? notInArray(occurrences.id, [...keptIds]) : undefined));
   const [updated] = await tx
     .update(items)
     .set({
@@ -436,6 +464,34 @@ async function rebuild(
     })
     .where(eq(items.id, item.id))
     .returning();
+
+  // Recorrente: as preservadas viram meses da regra nova antes de gravar; `ensureMaterialized` pula esses meses.
+  if (input.form === 'recurring' && kept.length) {
+    const targets = targetsFor({ form: 'recurring', startMonth: updated!.startMonth, endMonth: updated!.endMonth });
+    for (const [i, o] of kept.entries()) {
+      const month = targets[i]!.competenceMonth!;
+      await tx
+        .update(occurrences)
+        .set({
+          installmentNumber: null,
+          competenceMonth: month,
+          dueDate: updated!.dueDay ? dateInMonth(month, updated!.dueDay) : null,
+          invoiceId: null,
+          // A linha aberta recebe o valor do formulário; os outros meses pagos guardam o que tinham.
+          expectedCents: o.id === occ.id ? input.amountCents : o.expectedCents,
+          version: sql`${occurrences.version} + 1`,
+        })
+        .where(eq(occurrences.id, o.id));
+    }
+  }
+  // Única e parcelada: as preservadas recebem a linha planejada equivalente (valor e datas da sequência nova).
+  const reuse =
+    input.form !== 'recurring' && kept.length
+      ? (planned: { competenceMonth: Month }[]) => {
+          const targets = targetsFor(input.form === 'single' ? { form: 'single' } : { form: 'installment', months: planned.map((p) => p.competenceMonth) });
+          return new Map(kept.map((o, i) => [input.form === 'single' ? 0 : targets[i]!.installmentNumber! - 1, o.id] as const));
+        }
+      : undefined;
   await writeOccurrences(
     tx,
     walletId,
@@ -443,16 +499,22 @@ async function rebuild(
     account,
     { amountCents: input.amountCents, installments: input.installments ?? null, dueDate: input.form === 'single' && !credit ? (input.dueDate ?? null) : null, note: null },
     clock,
+    reuse,
   );
   for (const m of canceledMonths) await cancelMonthIfPresent(tx, walletId, item.id, m, clock);
+  for (const o of kept) await refreshStatus(tx, o.id);
 
   const fresh = await tx.query.occurrences.findMany({ where: eq(occurrences.itemId, item.id) });
   for (const o of fresh) {
+    if (keptIds.has(o.id)) continue;
     const note = notes.get(keyOf(o));
     if (note) await tx.update(occurrences).set({ note }).where(eq(occurrences.id, o.id));
   }
-  // A observação da linha aberta vai para a ocorrência equivalente na sequência nova.
-  if (input.note) {
+  // A observação da linha aberta vai para a ocorrência equivalente na sequência nova
+  // (se a linha aberta foi preservada, fica nela mesma).
+  if (keptIds.has(occ.id)) {
+    if (input.note !== undefined && (input.note || null) !== occ.note) await tx.update(occurrences).set({ note: input.note || null }).where(eq(occurrences.id, occ.id));
+  } else if (input.note) {
     let targetId: string | undefined;
     if (input.form === 'single') targetId = fresh[0]?.id;
     else if (input.form === 'installment') targetId = fresh.find((o) => o.installmentNumber === Math.min(k + 1, input.installments!))?.id;

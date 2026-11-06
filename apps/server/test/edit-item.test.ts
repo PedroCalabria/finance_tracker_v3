@@ -126,11 +126,22 @@ describe('edição que recria os meses', () => {
       ['4/4', 22500, '2027-02-07', null],
     ]);
   });
-  it('com pagamento registrado, recusa e explica', async () => {
+  it('com pagamento registrado, a única paga vira a parcela do mesmo mês e guarda o pagamento', async () => {
     await create({ description: 'Pizza', amountCents: 8000, date: '2026-11-02', alreadyPaid: true });
-    const res = await edit(find(await occ('2026-11'), 'Pizza'), { form: 'installment', installments: 2 });
+    const before = find(await occ('2026-11'), 'Pizza');
+    const res = await edit(before, { form: 'installment', installments: 2, amountCents: 16000 });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().occurrences.map((o: any) => [o.id === before.id, o.installmentLabel, o.expectedCents, o.paidCents, o.displayStatus])).toEqual([
+      [true, '1/2', 8000, 8000, 'paid'],
+      [false, '2/2', 8000, 0, 'pending'],
+    ]);
+  });
+  it('com pagamento registrado, trocar despesa por entrada é recusado e explica', async () => {
+    await create({ description: 'Pastel', amountCents: 1500, date: '2026-11-02', alreadyPaid: true });
+    const res = await edit(find(await occ('2026-11'), 'Pastel'), { type: 'income', method: 'transfer', dueDate: '2026-11-02' });
     expect(res.statusCode).toBe(409);
-    expect(res.json().error.message).toMatch(/desfaça o pagamento/i);
+    expect(res.json().error).toMatchObject({ code: 'payments_not_movable', message: expect.stringMatching(/despesa e entrada/) });
+    expect(find(await occ('2026-11'), 'Pastel').displayStatus).toBe('paid');
   });
   it('despesa vira entrada', async () => {
     await create({ description: 'Reembolso', amountCents: 4000, date: '2026-11-03' });

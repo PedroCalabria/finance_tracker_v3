@@ -4,14 +4,19 @@ import {
   METHODS,
   METHOD_LABEL,
   dateInMonth,
+  firstInstallmentDue,
   formatDateBR,
   formatMonthShort,
+  installmentDueDates,
+  monthOf,
+  paidTargets,
   type Account,
   type Category,
   type ItemDetail,
   type ItemForm,
   type ItemType,
   type Method,
+  type NewSequence,
   type OccurrenceRow,
 } from '@ff/shared';
 import { Button, DayInput, Field, Modal, MoneyInput, MonthInput, Notice, Segmented, errorText, fieldErrors, useToast } from '../components/ui';
@@ -54,7 +59,8 @@ const fieldError = (message: string, field: string) => Object.assign(new Error(m
  * hoje nasce paga; parcelas e recorrentes começam como promessa. Nas entradas únicas, a
  * própria data é a do recebimento (e do lembrete).
  * Na edição, mudar tipo, forma, parcelas, total, cartão, o mês de início, o dia da
- * cobrança ou a data de uma parcela recria os meses (o servidor recusa se já houver pagamento).
+ * cobrança ou a data de uma parcela recria os meses; os meses pagos ficam no lugar equivalente
+ * (o servidor recusa se não houver lugar para eles).
  */
 export function ItemFormModal(props: Props) {
   const { walletId, onClose } = props;
@@ -154,15 +160,29 @@ export function ItemFormModal(props: Props) {
       (form === 'installment' && (Number(installments) !== e.item.installments || amount !== e.item.totalCents)) ||
       datesChanged);
   const hasCanceledMonths = !!e && e.item.occurrences.some((o) => o.displayStatus === 'canceled');
-  // Mesmas recusas do servidor, avisadas antes de salvar.
+  // Mesmas recusas do servidor, avisadas antes de salvar. Os meses pagos são preservados
+  // no lugar equivalente da sequência nova (`paidTargets`); só se não houver lugar, recusa.
+  const paidSlots = e ? e.item.occurrences.filter((o) => o.payments.length > 0).map((o) => ({ competenceMonth: o.competenceMonth, installmentNumber: o.installmentNumber })) : [];
+  const paidCheck =
+    e && structural && paidSlots.length
+      ? paidTargets({ fromForm: e.item.form, typeChanged: type !== e.item.type, toCredit: credit, paid: paidSlots, to: nextSequence() })
+      : null;
+  function nextSequence(): NewSequence {
+    if (form === 'single') return { form: 'single' };
+    if (form === 'recurring') return { form: 'recurring', startMonth, endMonth: e!.item.form === 'recurring' ? e!.item.endMonth : null };
+    const n = Number(installments);
+    if (credit || !Number.isInteger(n) || n < 1) return { form: 'installment', months: [] };
+    // Como no servidor: a data desta parcela, recuada até a 1ª posição (se a forma mudou, a linha aberta é a 1ª).
+    const position = e!.item.form === 'installment' ? (e!.row.installmentNumber ?? 1) : 1;
+    const first = parcelDue ? firstInstallmentDue(parcelDue, position) : e!.item.entryDate;
+    return { form: 'installment', months: installmentDueDates(first, n).map(monthOf) };
+  }
   const blocked = !e
     ? null
-    : e.item.occurrences.some((o) => o.payments.length > 0)
-      ? e.item.form === 'recurring'
-        ? 'este lançamento já tem meses pagos. Encerre a recorrência e cadastre de novo.'
-        : 'este lançamento já tem pagamento registrado. Desfaça o pagamento antes ou cadastre de novo.'
-      : e.item.occurrences.some((o) => o.invoice && o.invoice.status !== 'open')
-        ? 'parte deste lançamento está numa fatura já paga. Cancele as parcelas futuras e cadastre de novo.'
+    : e.item.occurrences.some((o) => o.invoice && o.invoice.status !== 'open')
+      ? 'Essa mudança recalcula todos os meses, mas parte deste lançamento está numa fatura já paga. Cancele as parcelas futuras e cadastre de novo.'
+      : paidCheck && !paidCheck.ok
+        ? paidCheck.message
         : null;
   const editingParcel = !!e && e.item.form === 'installment' && form === 'installment';
   // Parcela aberta de uma parcelada que já era fora do crédito: a data é a desta parcela.
@@ -476,10 +496,10 @@ export function ItemFormModal(props: Props) {
       {structural && (
         <Notice tone={blocked ? 'danger' : 'info'}>
           {blocked
-            ? `Essa mudança recalcula todos os meses, mas ${blocked}`
-            : `Essa mudança recalcula todos os meses deste lançamento${credit || e!.item.method === 'credit' ? ' e as faturas' : ''}.${
-                recurring && e!.item.form === 'recurring' && hasCanceledMonths ? ' Os meses excluídos continuam excluídos.' : ''
-              }`}
+            ? blocked
+            : `Essa mudança recalcula ${paidSlots.length ? 'os' : 'todos os'} meses deste lançamento${credit || e!.item.method === 'credit' ? ' e as faturas' : ''}.${
+                paidSlots.length ? ' Os pagamentos já feitos continuam nos meses equivalentes.' : ''
+              }${recurring && e!.item.form === 'recurring' && hasCanceledMonths ? ' Os meses excluídos continuam excluídos.' : ''}`}
         </Notice>
       )}
       {form === 'single' && !credit && !income && (

@@ -102,7 +102,7 @@ describe('recorrente: mês de início + dia', () => {
     expect(find(await occ('2026-12'), 'Internet').dueDate).toBeNull();
   });
 
-  it('mudar o mês de início recria os meses; com pagamento, recusa', async () => {
+  it('mudar o mês de início recria os meses; o mês pago fica, e não pode ficar antes do início', async () => {
     const item = await create({ description: 'Seguro', form: 'recurring', amountCents: 8000, startMonth: '2026-11', day: 5, method: 'boleto' });
     const res = await edit(find(await occ('2026-11'), 'Seguro'), { startMonth: '2026-09' });
     expect(res.statusCode).toBe(200);
@@ -112,7 +112,15 @@ describe('recorrente: mês de início + dia', () => {
     await c.post(c.w(`/occurrences/${sep.id}/payments`), { paidAt: '2026-09-05', amountCents: 8000 });
     const refused = await edit(find(await occ('2026-11'), 'Seguro', '2026-11'), { startMonth: '2026-10' });
     expect(refused.statusCode).toBe(409);
-    expect(refused.json().error.message).toMatch(/encerre a recorrência/i);
+    expect(refused.json().error).toMatchObject({
+      code: 'payments_not_movable',
+      message: 'O mês pago de set/2026 ficaria antes do novo mês de início. Comece até set/2026 ou desfaça o pagamento.',
+    });
+    // Antecipar de novo: setembro continua pago (mesma ocorrência), agosto nasce pendente.
+    const ok = await edit(find(await occ('2026-11'), 'Seguro', '2026-11'), { startMonth: '2026-08' });
+    expect(ok.statusCode).toBe(200);
+    expect([find(await occ('2026-09'), 'Seguro').id, find(await occ('2026-09'), 'Seguro').displayStatus]).toEqual([sep.id, 'paid']);
+    expect(find(await occ('2026-08'), 'Seguro').displayStatus).not.toBe('paid');
   });
 
   it('salvar sem mexer num item do modelo antigo não recria os meses', async () => {

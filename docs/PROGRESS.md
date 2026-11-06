@@ -20,7 +20,7 @@ Atualizado em 05/11/2026. Fase 1 da especificação implementada; o que falta pa
 | Importação de extrato e fatura com conciliação: extrato e fatura Ourocard do BB em PDF, OFX de conta | Pronta | `packages/shared/src/imports/`, `apps/server/src/{imports,domain/imports}/`, `pages/ImportPage`, ADR-0010 |
 
 ## Verificação
-- 60 testes unitários (`packages/shared`) + 97 de integração (`apps/server/test`): migrações simultâneas (API e worker), leitores de importação (fixtures anonimizadas), autenticação (inclusive renovação sem o cookie de acesso e corrida entre abas), cadastros, edição de lançamentos, parcelas, recorrentes e projeções, exclusão de recorrente por alcance, importação e conciliação (extrato, fatura, senha, reimportação), pagamentos, faturas, resumo, concorrência, comprovantes (EXIF, cifragem, tipos), avisos (horário, fuso, dia útil, feriado, idempotência).
+- 73 testes unitários (`packages/shared`) + 106 de integração (`apps/server/test`): migrações simultâneas (API e worker), leitores de importação (fixtures anonimizadas), autenticação (inclusive renovação sem o cookie de acesso e corrida entre abas), cadastros, edição de lançamentos (inclusive estrutural com meses pagos), parcelas, recorrentes e projeções, exclusão de recorrente por alcance, importação e conciliação (extrato, fatura, senha, reimportação), pagamentos, faturas, resumo, concorrência, comprovantes (EXIF, cifragem, tipos), avisos (horário, fuso, dia útil, feriado, idempotência).
 - Roteiro completo no navegador em 1440px, 1920px, 900px e celular, claro e escuro.
 - Passos do Dockerfile reproduzidos numa cópia limpa (o ambiente de desenvolvimento não tinha Docker).
 
@@ -46,6 +46,9 @@ Atualizado em 05/11/2026. Fase 1 da especificação implementada; o que falta pa
 - **Excluir recorrente pergunta o alcance:** só este mês (`POST /occurrences/:id/cancel`, inclusive nos meses previstos), este e os próximos (`POST /items/:id/end` com `occurrenceId`, substitui "Encerrar a partir deste mês") e toda a recorrência; recusas com `month_has_payment`, `month_in_paid_invoice`, `later_months_paid` e `not_recurring` (ADR-0004, ADR-0009).
 - Observado nos testes, não corrigido: pagar uma fatura não grava as cobranças recorrentes **previstas** dela; a linha continua "Prevista" com status de fatura em aberto até alguém mexer no mês.
 - O teste `a limpeza apaga órfãos com mais de 24 h` depende da data real (cria o comprovante com o relógio do sistema e simula 05/11 15h): falha a partir de 04/11/2026. Precisa usar o relógio do teste também na gravação.
+
+## Ajustes de 06/11/2026
+- **Edição estrutural preserva os meses pagos:** transformar uma única paga (por exemplo, importada do extrato) em recorrente ou parcelada, mudar o mês de início, a data de uma parcela ou o nº de parcelas não é mais recusado só por ter pagamento. A ocorrência paga fica, com pagamentos, comprovantes e vínculo do extrato, e vai para o lugar equivalente da sequência nova. A recusa (`payments_not_movable`) só vale quando não há lugar, com a mensagem dizendo o porquê. O formulário avisa antes de salvar com a mesma regra (`paidTargets`, ADR-0004).
 
 ## Observações para as próximas etapas
 - **Carteira familiar:** criar `POST /wallets`, convites (`/wallets/:id/invites`, `/invites/:token/accept`) e um seletor de carteira na interface; as rotas financeiras já são por carteira. O resumo diário já percorre todas as carteiras da pessoa.

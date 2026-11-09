@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { MONTH_NAMES, centsToInput, formatDateBR, formatMonthShort, parseBRL, type DisplayStatus, type OccurrenceRow } from '@ff/shared';
+import { MONTH_NAMES, centsToInput, formatDateBR, formatMonthShort, parseBRL, type DisplayStatus, type OccurrenceRow, type Person } from '@ff/shared';
 import { ApiError } from '../lib/api';
 import { todayISO } from '../lib/hooks';
 import { Icon, type IconName } from './Icon';
@@ -176,6 +176,120 @@ export function DayInput({ id, value, onChange }: { id: string; value: number | 
         onChange(digits ? Number(digits) : null);
       }}
     />
+  );
+}
+
+/**
+ * Número inteiro com setas dentro da caixa (ADR-0009): o design system não tem esse
+ * campo, e o `type="number"` não mostra as setas no Safari do iPhone. As setas ficam
+ * fora da tabulação; no teclado, ↑/↓ no próprio campo. O valor é texto para a
+ * pessoa poder apagar e digitar de novo.
+ */
+export function StepperInput({
+  id,
+  value,
+  onChange,
+  min,
+  max,
+  incLabel,
+  decLabel,
+}: {
+  id: string;
+  value: string;
+  onChange: (value: string) => void;
+  min: number;
+  max: number;
+  incLabel: string;
+  decLabel: string;
+}) {
+  const n = value === '' ? null : Number(value);
+  const step = (d: 1 | -1) => {
+    const next = n == null ? min : Math.min(max, Math.max(min, n + d));
+    onChange(String(next));
+  };
+  const canDec = n != null && n > min;
+  const canInc = n == null || n < max;
+  return (
+    <span className="app-stepper">
+      <input
+        id={id}
+        className="ff-input ff-num"
+        inputMode="numeric"
+        autoComplete="off"
+        value={value}
+        onChange={(e) => onChange(e.target.value.replace(/\D/g, '').slice(0, String(max).length))}
+        onKeyDown={(e) => {
+          if (e.key === 'ArrowUp' && canInc) (e.preventDefault(), step(1));
+          else if (e.key === 'ArrowDown' && canDec) (e.preventDefault(), step(-1));
+        }}
+      />
+      <span className="app-stepper__arrows">
+        <button type="button" tabIndex={-1} aria-label={incLabel} title={incLabel} disabled={!canInc} onClick={() => step(1)}>
+          <Icon name="up" />
+        </button>
+        <button type="button" tabIndex={-1} aria-label={decLabel} title={decLabel} disabled={!canDec} onClick={() => step(-1)}>
+          <Icon name="down" />
+        </button>
+      </span>
+    </span>
+  );
+}
+
+/**
+ * Responsável do lançamento: "Eu" (valor vazio, opcional), as pessoas ativas em ordem
+ * alfabética e "+ Nova pessoa", que troca a lista por um campo de nome (a pessoa é
+ * criada ao salvar). `current` mantém na lista a pessoa atual mesmo arquivada.
+ */
+export function PersonSelect({
+  id,
+  people,
+  value,
+  onChange,
+  newName,
+  onNewName,
+  allowMe = true,
+  current,
+}: {
+  id: string;
+  people: Person[];
+  value: string;
+  onChange: (personId: string) => void;
+  newName: string | null;
+  onNewName: (name: string | null) => void;
+  allowMe?: boolean;
+  current?: { id: string; name: string } | null;
+}) {
+  if (newName !== null) {
+    return (
+      <span style={{ display: 'flex', gap: 8 }}>
+        <input id={id} className="ff-input" placeholder="Nome da pessoa" value={newName} onChange={(e) => onNewName(e.target.value)} maxLength={60} autoFocus />
+        <Button variant="ghost" onClick={() => onNewName(null)}>
+          Voltar
+        </Button>
+      </span>
+    );
+  }
+  const list = people.filter((p) => !p.archived);
+  if (current && !list.some((p) => p.id === current.id)) list.push({ ...current, archived: true });
+  list.sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
+  return (
+    <select
+      id={id}
+      className="ff-select"
+      value={value}
+      onChange={(e) => {
+        if (e.target.value === '__new') onNewName('');
+        else onChange(e.target.value);
+      }}
+    >
+      {allowMe ? <option value="">Eu</option> : <option value="">Escolha a pessoa</option>}
+      {list.map((p) => (
+        <option key={p.id} value={p.id}>
+          {p.name}
+        </option>
+      ))}
+      <option value="__new">+ Nova pessoa</option>
+    </select>
   );
 }
 

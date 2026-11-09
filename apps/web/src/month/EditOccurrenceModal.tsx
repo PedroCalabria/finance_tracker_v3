@@ -14,6 +14,16 @@ import { ItemFormModal } from './ItemFormModal';
  * recorrente pergunta o alcance (só este mês, este e os próximos, toda); nos meses
  * previstos, só essa ação aparece.
  */
+/** "Excluir também o reembolso": ao excluir a despesa inteira que tem entrada de reembolso vinculada. */
+export function ReimbursementCheckbox({ description, checked, onChange }: { description: string; checked: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <label className="app-checkbox">
+      <input type="checkbox" checked={checked} onChange={(ev) => onChange(ev.target.checked)} />
+      Excluir também o reembolso ({description})
+    </label>
+  );
+}
+
 export function EditOccurrenceModal({ walletId, row, onClose, onPay }: { walletId: string; row: OccurrenceRow; onClose: () => void; onPay: () => void }) {
   const toast = useToast();
   const item = useItem(walletId, row.systemKind ? null : row.itemId);
@@ -22,6 +32,9 @@ export function EditOccurrenceModal({ walletId, row, onClose, onPay }: { walletI
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   const [confirm, setConfirm] = useState<null | 'cancel' | 'delete' | 'move'>(null);
+  // Excluir a despesa inteira: também a entrada de reembolso vinculada (padrão marcado).
+  const [withReimbursement, setWithReimbursement] = useState(true);
+  const reimbursement = item.data?.reimbursement ?? null;
   const system = !!row.systemKind;
   const W = walletUrl(walletId);
 
@@ -73,18 +86,37 @@ export function EditOccurrenceModal({ walletId, row, onClose, onPay }: { walletI
     );
   }
   if (confirm === 'delete' && row.form === 'recurring') {
-    return <DeleteRecurringDialog walletId={walletId} row={row} firstMonth={item.data?.startMonth ?? null} onClose={() => setConfirm(null)} onDone={onClose} />;
+    return (
+      <DeleteRecurringDialog
+        walletId={walletId}
+        row={row}
+        firstMonth={item.data?.startMonth ?? null}
+        reimbursement={reimbursement}
+        onClose={() => setConfirm(null)}
+        onDone={onClose}
+      />
+    );
   }
   if (confirm === 'delete') {
     return (
       <ConfirmDialog
         title={`Excluir "${row.description}"?`}
-        message={row.form === 'single' ? 'O lançamento some das telas.' : 'O lançamento some de todos os meses. Para manter o histórico, prefira encerrar ou cancelar as parcelas.'}
+        message={
+          <>
+            {row.form === 'single' ? 'O lançamento some das telas.' : 'O lançamento some de todos os meses. Para manter o histórico, prefira encerrar ou cancelar as parcelas.'}
+            {reimbursement && <ReimbursementCheckbox description={reimbursement.description} checked={withReimbursement} onChange={setWithReimbursement} />}
+          </>
+        }
         confirmLabel="Excluir"
         busy={busy}
         error={err}
         onClose={() => setConfirm(null)}
-        onConfirm={() => act(() => api.del(`${W}/items/${row.itemId}`), 'Lançamento excluído.')}
+        onConfirm={() =>
+          act(
+            () => api.del(`${W}/items/${row.itemId}${reimbursement && withReimbursement ? '?withReimbursement=1' : ''}`),
+            reimbursement && withReimbursement ? 'Lançamento e reembolso excluídos.' : 'Lançamento excluído.',
+          )
+        }
       />
     );
   }

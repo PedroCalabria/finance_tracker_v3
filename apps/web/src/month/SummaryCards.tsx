@@ -2,32 +2,44 @@ import type { ItemType, Summary } from '@ff/shared';
 import { Icon, type IconName } from '../components/Icon';
 import { StatusBadge, brl } from '../components/ui';
 
-/** Os três cards do mês (design system: SummaryCard). Só o Balanço é preenchido. */
+/**
+ * Os três cards do mês (design system: SummaryCard). O previsto do mês fica em destaque
+ * e o realizado na linha de baixo (ADR-0004). Gastos = consumo pelo mês do gasto (no
+ * crédito, o mês da compra); "Na conta até agora" = caixa (recebido − o que saiu da conta,
+ * inclusive faturas pagas). Só o Balanço é preenchido.
+ */
 export function SummaryCards({ summary, onSeeType }: { summary: Summary | undefined; onSeeType: (t: ItemType) => void }) {
   const s = summary;
   const value = (c: number | undefined) => (c === undefined ? '—' : brl(c));
+  const signed = (c: number) => `${c < 0 ? '− ' : ''}${brl(Math.abs(c))}`;
   return (
     <div className="ff-summary-grid">
       <Card
         hero
         icon="wallet"
         title="Balanço do mês"
-        subtitle="Recebido menos pago"
-        value={s && `${s.balance.realizedCents < 0 ? '− ' : ''}${brl(Math.abs(s.balance.realizedCents))}`}
+        subtitle="Entradas menos gastos do mês"
+        value={s && signed(s.balance.forecastCents)}
         meta={
           <>
-            Previsto até o fim do mês: <strong>{s ? `${s.balance.forecastCents < 0 ? '− ' : ''}${brl(Math.abs(s.balance.forecastCents))}` : '—'}</strong>
+            Na conta até agora: <strong>{s ? signed(s.balance.realizedCents) : '—'}</strong>
           </>
         }
       />
       <Card
         icon="in"
         title="Entradas do mês"
-        subtitle="O que já foi recebido"
-        value={value(s?.income.receivedCents)}
+        subtitle="Previsto no mês"
+        value={value(s?.income.forecastCents)}
         meta={
           <>
-            <strong>{value(s?.income.pendingCents)}</strong> a receber
+            <span>
+              <strong>{value(s?.income.receivedCents)}</strong> recebido
+            </span>
+            <span aria-hidden="true">·</span>
+            <span>
+              <strong>{value(s?.income.pendingCents)}</strong> a receber
+            </span>
           </>
         }
         footLabel="Ver entradas"
@@ -36,11 +48,17 @@ export function SummaryCards({ summary, onSeeType }: { summary: Summary | undefi
       <Card
         icon="out"
         title="Gastos do mês"
-        subtitle="O que já foi pago"
-        value={value(s?.expense.paidCents)}
+        subtitle="Previsto no mês"
+        value={value(s?.expense.forecastCents)}
         meta={
           <>
-            <strong>{value(s?.expense.pendingCents)}</strong> a pagar
+            <span>
+              <strong>{value(s?.expense.paidCents)}</strong> pago
+            </span>
+            <span aria-hidden="true">·</span>
+            <span>
+              <strong>{value(s?.expense.pendingCents)}</strong> a pagar
+            </span>
             {s && s.expense.lateCents > 0 && <StatusBadge status="late" label={`${brl(s.expense.lateCents)} em atraso`} />}
           </>
         }

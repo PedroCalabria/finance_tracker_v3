@@ -10,6 +10,7 @@ import type {
   MonthsRange,
   NotificationSettings,
   OccurrenceRow,
+  Person,
   Summary,
 } from '@ff/shared';
 import { api, ApiError } from './api';
@@ -31,6 +32,7 @@ export const useMe = () => useQuery({ queryKey: ['me'], queryFn: () => api.get<M
 const W = (w: string) => `/api/wallets/${w}`;
 
 export const useCategories = (w: string) => useQuery({ queryKey: ['categories', w], queryFn: () => api.get<Category[]>(`${W(w)}/categories`), enabled: !!w });
+export const usePeople = (w: string) => useQuery({ queryKey: ['people', w], queryFn: () => api.get<Person[]>(`${W(w)}/people`), enabled: !!w });
 export const useAccounts = (w: string) => useQuery({ queryKey: ['accounts', w], queryFn: () => api.get<Account[]>(`${W(w)}/accounts`), enabled: !!w });
 export const useMonths = (w: string) => useQuery({ queryKey: ['months', w], queryFn: () => api.get<MonthsRange>(`${W(w)}/months`), enabled: !!w });
 export const useSummary = (w: string, month: string) =>
@@ -82,6 +84,7 @@ export function useFinanceMutation<TVars, TRes = unknown>(w: string, fn: (vars: 
     onSuccess: () => {
       invalidateFinance(w);
       void qc.invalidateQueries({ queryKey: ['categories', w] });
+      void qc.invalidateQueries({ queryKey: ['people', w] });
     },
   });
 }

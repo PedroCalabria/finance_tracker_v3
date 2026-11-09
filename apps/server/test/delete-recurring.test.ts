@@ -78,18 +78,20 @@ describe('só este mês', () => {
     // Cobrança no dia 15: outubro cai na fatura de novembro do BB (fecha dia 1).
     await create({ description: 'Streaming', method: 'credit', accountId: bb, amountCents: 3990, startMonth: '2026-10', day: 15 });
     const before = await invoice('2026-11', bb);
-    const row = find(await occ('2026-11'), 'Streaming');
+    // Na tabela, a cobrança fica no mês dela (out), na fatura de nov.
+    const row = find(await occ('2026-10'), 'Streaming');
     expect(row.invoice.referenceMonth).toBe('2026-11');
     expect((await cancel(row.id)).statusCode).toBe(200);
     expect(before.itemsCents - (await invoice('2026-11', bb)).itemsCents).toBe(3990);
   });
 
   it('no crédito numa fatura paga: recusa (mês gravado e mês previsto)', async () => {
-    // BB fecha dia 1: a cobrança de 20/10 vai para a fatura de novembro (gravada); a de 20/11, para a de dezembro (prevista).
+    // BB fecha dia 1: a cobrança de 20/10 vai para a fatura de novembro; a de 20/11, para a de dezembro
+    // (as duas gravadas, porque já foram cobradas); a de 20/12, para a de janeiro (prevista).
     await create({ description: 'Jornal', method: 'credit', accountId: bb, amountCents: 2500, startMonth: '2026-10', day: 20 });
     const nov = await invoice('2026-11', bb);
     expect((await c.post(c.w(`/invoices/${nov.id}/payments`), { realAmountCents: nov.totalCents, amountCents: nov.totalCents, paidAt: '2026-11-03' })).statusCode).toBe(201);
-    const recorded = find(await occ('2026-11'), 'Jornal');
+    const recorded = find(await occ('2026-10'), 'Jornal');
     expect(recorded.displayStatus).toBe('invoice_paid');
     const res = await cancel(recorded.id);
     expect(res.statusCode).toBe(409);
@@ -97,9 +99,10 @@ describe('só este mês', () => {
       code: 'month_in_paid_invoice',
       message: 'Este mês está numa fatura já paga. Desfaça o pagamento da fatura antes de excluir o mês.',
     });
+    expect(find(await occ('2026-11'), 'Jornal')).toMatchObject({ projected: false, invoice: expect.objectContaining({ referenceMonth: '2026-12' }) });
     // Mês previsto numa fatura já paga: gravar a projeção não basta para escapar da regra.
-    const dec = await invoice('2026-12', bb);
-    expect((await c.post(c.w(`/invoices/${dec.id}/payments`), { realAmountCents: dec.totalCents, amountCents: dec.totalCents, paidAt: '2026-11-03' })).statusCode).toBe(201);
+    const jan = await invoice('2027-01', bb);
+    expect((await c.post(c.w(`/invoices/${jan.id}/payments`), { realAmountCents: jan.totalCents, amountCents: jan.totalCents, paidAt: '2026-11-03' })).statusCode).toBe(201);
     const projected = find(await occ('2026-12'), 'Jornal');
     expect(projected.projected).toBe(true);
     expect((await cancel(projected.id)).json().error.code).toBe('month_in_paid_invoice');
@@ -146,15 +149,16 @@ describe('este e os próximos', () => {
   });
 
   it('no crédito: encerra pela cobrança da fatura escolhida', async () => {
-    // Nubank fecha dia 25: a cobrança de 15/12 vai para a fatura de janeiro.
+    // Nubank fecha dia 25: a cobrança de 15/12 vai para a fatura de janeiro, e aparece em dezembro.
     const item = await create({ description: 'Nuvem', method: 'credit', accountId: nu, amountCents: 1000, startMonth: '2026-10', day: 15 });
-    const janRow = find(await occ('2027-01'), 'Nuvem');
-    const res = await endFrom(item.id, janRow.id);
+    const decRow = find(await occ('2026-12'), 'Nuvem');
+    expect(decRow.competenceMonth).toBe('2027-01');
+    const res = await endFrom(item.id, decRow.id);
     expect(res.statusCode).toBe(200);
-    // Encerrar a partir da fatura de janeiro tira a cobrança de 15/12: o último mês de cobrança é novembro.
+    // Encerrar a partir da cobrança de 15/12: o último mês de cobrança é novembro.
     expect(res.json().endMonth).toBe('2026-11');
-    expect(find(await occ('2026-12'), 'Nuvem')).toBeDefined();
-    expect(find(await occ('2027-01'), 'Nuvem')).toBeUndefined();
+    expect(find(await occ('2026-11'), 'Nuvem')).toBeDefined();
+    expect(find(await occ('2026-12'), 'Nuvem')).toBeUndefined();
   });
 
   it('no primeiro mês: equivale a excluir toda a recorrência', async () => {

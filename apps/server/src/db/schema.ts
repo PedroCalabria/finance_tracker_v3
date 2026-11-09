@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
 import {
+  type AnyPgColumn,
   boolean,
   char,
   check,
@@ -107,6 +108,23 @@ export const categories = pgTable(
   (t) => [uniqueIndex('categories_name_uq').on(t.walletId, t.type, sql`lower(${t.name})`).where(sql`${t.archivedAt} is null`)],
 );
 
+/** Pessoas da carteira: o "responsável" de um lançamento (nulo = "Eu"). Terceiros, não usuários. */
+export const people = pgTable(
+  'people',
+  {
+    id: id(),
+    walletId: uuid('wallet_id').notNull().references(() => wallets.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    archivedAt: timestamp('archived_at', { withTimezone: true }),
+    version: version(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex('people_name_uq').on(t.walletId, sql`lower(${t.name})`).where(sql`${t.archivedAt} is null`),
+    index('people_wallet_idx').on(t.walletId),
+  ],
+);
+
 export const accounts = pgTable(
   'accounts',
   {
@@ -191,12 +209,16 @@ export const items = pgTable(
     systemKind: text('system_kind', { enum: ['invoice_adjustment', 'invoice_carryover'] }),
     /** Item de sistema: a fatura que o gerou. */
     sourceInvoiceId: uuid('source_invoice_id'),
+    /** Responsável pelo lançamento; nulo = "Eu". */
+    personId: uuid('person_id').references(() => people.id, { onDelete: 'set null' }),
+    /** Entrada de reembolso: a despesa de outra pessoa que a gerou. */
+    reimbursesItemId: uuid('reimburses_item_id').references((): AnyPgColumn => items.id, { onDelete: 'set null' }),
     createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
     deletedAt: timestamp('deleted_at', { withTimezone: true }),
     version: version(),
     createdAt: createdAt(),
   },
-  (t) => [index('items_wallet_idx').on(t.walletId)],
+  (t) => [index('items_wallet_idx').on(t.walletId), index('items_reimburses_idx').on(t.reimbursesItemId)],
 );
 
 /** Um mês concreto de um item. As linhas da tabela da interface. */
@@ -206,7 +228,10 @@ export const occurrences = pgTable(
     id: id(),
     walletId: uuid('wallet_id').notNull().references(() => wallets.id, { onDelete: 'cascade' }),
     itemId: uuid('item_id').notNull().references(() => items.id, { onDelete: 'cascade' }),
+    /** Mês da ocorrência; no crédito, o mês da FATURA (ADR-0005). */
     competenceMonth: monthCol('competence_month').notNull(),
+    /** Mês do gasto: no crédito, o da compra ou cobrança; fora dele, igual a `competence_month` (ADR-0004). */
+    chargeMonth: monthCol('charge_month').notNull(),
     installmentNumber: smallint('installment_number'),
     expectedCents: integer('expected_cents').notNull(),
     dueDate: dateCol('due_date'),
@@ -221,6 +246,7 @@ export const occurrences = pgTable(
     uniqueIndex('occurrences_item_month_uq').on(t.itemId, t.competenceMonth).where(sql`${t.installmentNumber} is null`),
     uniqueIndex('occurrences_item_installment_uq').on(t.itemId, t.installmentNumber).where(sql`${t.installmentNumber} is not null`),
     index('occurrences_wallet_month_idx').on(t.walletId, t.competenceMonth),
+    index('occurrences_wallet_charge_idx').on(t.walletId, t.chargeMonth),
     index('occurrences_invoice_idx').on(t.invoiceId),
   ],
 );

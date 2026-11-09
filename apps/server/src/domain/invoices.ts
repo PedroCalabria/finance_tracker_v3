@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { and, asc, eq, gte, inArray, isNull, lt, lte, ne, sql } from 'drizzle-orm';
 import {
+  addDays,
   addMonths,
   compareDates,
   defaultInvoiceDates,
@@ -99,12 +100,18 @@ export async function toInvoiceRow(tx: Tx, inv: InvoiceRec, clock: Clock, projec
     const next = await tx.query.invoices.findFirst({ where: eq(invoices.id, inv.carriedToInvoiceId), columns: { referenceMonth: true } });
     carriedToMonth = next?.referenceMonth ?? null;
   }
+  // Período das compras: do fechamento da fatura anterior (gravada ou padrão) até a véspera deste.
+  const prevMonth = addMonths(inv.referenceMonth, -1);
+  const prev = await tx.query.invoices.findFirst({ where: and(eq(invoices.accountId, inv.accountId), eq(invoices.referenceMonth, prevMonth)), columns: { closingDate: true } });
+  const purchasesFrom = prev?.closingDate ?? defaultInvoiceDates(prevMonth, account.closingDay!, account.dueDay!).closingDate;
   return {
     id: inv.id,
     account: { id: account.id, name: account.name, bank: account.bank },
     referenceMonth: inv.referenceMonth,
     closingDate: inv.closingDate,
     dueDate: inv.dueDate,
+    purchasesFrom,
+    purchasesTo: addDays(inv.closingDate, -1),
     status: inv.status,
     late: inv.status === 'open' && compareDates(inv.dueDate, clock.today) < 0 && itemsCents - paidCents > 0,
     itemsCents,
@@ -159,6 +166,9 @@ async function createSystemItem(
     walletId: inv.walletId,
     itemId: it!.id,
     competenceMonth: inv.referenceMonth,
+    // Mês do gasto = o da fatura: o ajuste (juros, tarifas) é gasto daquele mês; o saldo
+    // transferido não é gasto novo e fica fora do consumo pelo `system_kind` (ADR-0005).
+    chargeMonth: inv.referenceMonth,
     expectedCents: cents,
     dueDate: inv.dueDate,
     invoiceId: inv.id,

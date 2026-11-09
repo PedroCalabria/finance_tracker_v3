@@ -20,6 +20,8 @@ import {
   occurrencesQuery,
   paymentInput,
   paymentUpdateInput,
+  personInput,
+  personUpdate,
 } from '@ff/shared';
 import { z } from 'zod';
 import type { AppContext } from '../../context';
@@ -68,6 +70,12 @@ export async function walletRoutes(app: FastifyInstance, ctx: AppContext): Promi
     r.patch<P<'id'>>(`${W}/categories/:id`, async (req) => catalog.renameCategory(ctx.db, req.walletId, req.params.id, parse(categoryUpdate, req.body).name));
     r.delete<P<'id'>>(`${W}/categories/:id`, async (req) => catalog.removeCategory(ctx.db, req.walletId, req.params.id));
 
+    // ---- Pessoas (responsável dos lançamentos)
+    r.get<P>(`${W}/people`, async (req) => catalog.listPeople(ctx.db, req.walletId, (req.query as { all?: string }).all === '1'));
+    r.post<P>(`${W}/people`, async (req, reply) => reply.status(201).send(await catalog.createPerson(ctx.db, req.walletId, parse(personInput, req.body).name)));
+    r.patch<P<'id'>>(`${W}/people/:id`, async (req) => catalog.renamePerson(ctx.db, req.walletId, req.params.id, parse(personUpdate, req.body).name));
+    r.delete<P<'id'>>(`${W}/people/:id`, async (req) => catalog.removePerson(ctx.db, req.walletId, req.params.id));
+
     // ---- Contas e cartões
     r.get<P>(`${W}/accounts`, async (req) => catalog.listAccounts(ctx.db, req.walletId, (req.query as { all?: string }).all === '1'));
     r.post<P>(`${W}/accounts`, async (req, reply) => reply.status(201).send(await catalog.createAccount(ctx.db, req.walletId, parse(accountInput, req.body))));
@@ -91,7 +99,8 @@ export async function walletRoutes(app: FastifyInstance, ctx: AppContext): Promi
     });
     r.post<P<'id'>>(`${W}/items/:id/cancel`, async (req) => itemsSvc.cancelInstallments(ctx.db, req.walletId, req.params.id, await clock(req)));
     r.delete<P<'id'>>(`${W}/items/:id`, async (req, reply) => {
-      await itemsSvc.deleteItem(ctx.db, req.walletId, req.params.id);
+      const withReimbursement = (req.query as { withReimbursement?: string }).withReimbursement === '1';
+      await itemsSvc.deleteItem(ctx.db, req.walletId, req.params.id, { withReimbursement });
       return reply.status(204).send();
     });
 

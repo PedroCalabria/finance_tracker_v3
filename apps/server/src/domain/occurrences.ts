@@ -10,14 +10,14 @@ import {
   type OccurrenceUpdateInput,
 } from '@ff/shared';
 import type { DB, Tx } from '../db/client';
-import { accounts, attachments, categories, invoices, items, occurrences, payments } from '../db/schema';
+import { accounts, attachments, categories, invoices, items, occurrences, payments, people } from '../db/schema';
 import { AppError, badRequest, conflict, notFound } from '../http/errors';
 import type { Clock } from './clock';
 import { ensureMaterialized, materializeProjection, projectionId, projectionsFor, type ProjectedSlot } from './projections';
 
 /**
  * Ocorrências = as linhas da tabela (ADR-0004). Esta camada monta a linha
- * completa (item, categoria, conta, fatura, pagamentos e comprovantes) e o
+ * completa (item, categoria, responsável, conta, fatura, pagamentos e comprovantes) e o
  * status exibido, que inclui o "Atrasado" calculado.
  */
 
@@ -61,10 +61,12 @@ export async function buildRows(tx: Tx, occs: OccRec[], clock: Clock): Promise<O
   const itemById = new Map(itemRecs.map((i) => [i.id, i]));
   const catIds = [...new Set(itemRecs.map((i) => i.categoryId).filter((x): x is string => !!x))];
   const accIds = [...new Set(itemRecs.map((i) => i.accountId).filter((x): x is string => !!x))];
+  const personIds = [...new Set(itemRecs.map((i) => i.personId).filter((x): x is string => !!x))];
   const invIds = [...new Set(occs.map((o) => o.invoiceId).filter((x): x is string => !!x))];
   // Em sequência: dentro de uma transação a conexão é uma só.
   const cats = catIds.length ? await tx.query.categories.findMany({ where: inArray(categories.id, catIds) }) : [];
   const accs = accIds.length ? await tx.query.accounts.findMany({ where: inArray(accounts.id, accIds) }) : [];
+  const ppl = personIds.length ? await tx.query.people.findMany({ where: inArray(people.id, personIds) }) : [];
   const invs = invIds.length ? await tx.query.invoices.findMany({ where: inArray(invoices.id, invIds) }) : [];
   const pays = await tx.query.payments.findMany({ where: inArray(payments.occurrenceId, occs.map((o) => o.id)), orderBy: payments.paidAt });
   const groupIds = [...new Set(pays.map((p) => p.groupId))];
@@ -73,12 +75,14 @@ export async function buildRows(tx: Tx, occs: OccRec[], clock: Clock): Promise<O
     : [];
   const catById = new Map(cats.map((c) => [c.id, c]));
   const accById = new Map(accs.map((a) => [a.id, a]));
+  const personById = new Map(ppl.map((p) => [p.id, p]));
   const invById = new Map(invs.map((i) => [i.id, i]));
 
   return occs.map((occ) => {
     const item = itemById.get(occ.itemId)!;
     const cat = item.categoryId ? catById.get(item.categoryId) : undefined;
     const acc = item.accountId ? accById.get(item.accountId) : undefined;
+    const person = item.personId ? personById.get(item.personId) : undefined;
     const inv = occ.invoiceId ? (invById.get(occ.invoiceId) ?? null) : null;
     const myPays = pays.filter((p) => p.occurrenceId === occ.id);
     const paidCents = myPays.reduce((s, p) => s + p.amountCents, 0);
@@ -92,9 +96,11 @@ export async function buildRows(tx: Tx, occs: OccRec[], clock: Clock): Promise<O
       systemKind: item.systemKind,
       description: item.description,
       category: cat ? { id: cat.id, name: cat.name } : null,
+      person: person ? { id: person.id, name: person.name } : null,
       method: item.method,
       account: acc ? { id: acc.id, name: acc.name, bank: acc.bank, kind: acc.kind } : null,
       competenceMonth: occ.competenceMonth,
+      chargeMonth: occ.chargeMonth,
       installmentNumber: occ.installmentNumber,
       installmentsTotal: item.form === 'installment' ? item.installments : null,
       installmentLabel: installmentLabel(item, occ),
@@ -123,7 +129,7 @@ export async function buildRows(tx: Tx, occs: OccRec[], clock: Clock): Promise<O
 }
 
 /** Linha virtual de uma recorrente projetada (mês futuro). */
-export function projectedRow(p: ProjectedSlot, cat: { id: string; name: string } | null): OccurrenceRow {
+export function projectedRow(p: ProjectedSlot, cat: { id: string; name: string } | null, person: { id: string; name: string } | null = null): OccurrenceRow {
   const item = p.item;
   return {
     id: projectionId(item.id, p.competenceMonth),
@@ -134,9 +140,11 @@ export function projectedRow(p: ProjectedSlot, cat: { id: string; name: string }
     systemKind: null,
     description: item.description,
     category: cat,
+    person,
     method: item.method,
     account: p.account ? { id: p.account.id, name: p.account.name, bank: p.account.bank, kind: p.account.kind } : null,
     competenceMonth: p.competenceMonth,
+    chargeMonth: p.chargeMonth,
     installmentNumber: null,
     installmentsTotal: null,
     installmentLabel: 'Recorrente',
@@ -169,14 +177,15 @@ const sortRows = (a: OccurrenceRow, b: OccurrenceRow) => {
 
 export async function listOccurrences(db: DB, walletId: string, f: OccurrenceFilters, clock: Clock): Promise<OccurrenceRow[]> {
   await ensureMaterialized(db, walletId, clock);
+  // A tabela é pelo mês do gasto (no crédito, o da compra; ADR-0004).
   const monthCond: SQL =
     f.month === clock.currentMonth
       ? // No mês atual também entram os atrasados de meses anteriores (fora do crédito).
         or(
-          eq(occurrences.competenceMonth, f.month),
+          eq(occurrences.chargeMonth, f.month),
           and(lt(occurrences.competenceMonth, f.month), inArray(occurrences.status, ['pending', 'partial']), isNull(occurrences.invoiceId)),
         )!
-      : eq(occurrences.competenceMonth, f.month);
+      : eq(occurrences.chargeMonth, f.month);
   const conds: SQL[] = [eq(occurrences.walletId, walletId), monthCond, eq(items.type, f.type), isNull(items.deletedAt)];
   if (f.recurring) conds.push(inArray(items.form, ['installment', 'recurring']));
   if (f.categoryId) conds.push(eq(items.categoryId, f.categoryId));
@@ -192,15 +201,17 @@ export async function listOccurrences(db: DB, walletId: string, f: OccurrenceFil
     clock,
   );
 
-  const projections = (await projectionsFor(db, walletId, f.month, clock)).filter(
+  const projections = (await projectionsFor(db, walletId, f.month, clock, 'charge')).filter(
     (p) => p.item.type === f.type && (!f.categoryId || p.item.categoryId === f.categoryId) && (!f.accountId || p.item.accountId === f.accountId),
   );
   if (projections.length) {
     const cats = await db.query.categories.findMany({ where: eq(categories.walletId, walletId) });
+    const ppl = await db.query.people.findMany({ where: eq(people.walletId, walletId) });
     rows = rows.concat(
       projections.map((p) => {
         const c = cats.find((x) => x.id === p.item.categoryId);
-        return projectedRow(p, c ? { id: c.id, name: c.name } : null);
+        const who = ppl.find((x) => x.id === p.item.personId);
+        return projectedRow(p, c ? { id: c.id, name: c.name } : null, who ? { id: who.id, name: who.name } : null);
       }),
     );
   }
@@ -284,7 +295,11 @@ export async function patchOccurrence(
   if (input.expectedCents !== undefined) patch.expectedCents = input.expectedCents;
   if (input.dueDate !== undefined) patch.dueDate = input.dueDate;
   if (input.note !== undefined) patch.note = input.note || null;
-  if (input.competenceMonth !== undefined) patch.competenceMonth = input.competenceMonth;
+  if (input.competenceMonth !== undefined) {
+    patch.competenceMonth = input.competenceMonth;
+    // Fora do crédito, o mês do gasto acompanha o mês da ocorrência (no crédito, mover de fatura não o muda).
+    if (item.method !== 'credit') patch.chargeMonth = input.competenceMonth;
+  }
   await tx
     .update(occurrences)
     .set({ ...patch, version: sql`${occurrences.version} + 1` })

@@ -7,9 +7,10 @@ import type { Clock } from './clock';
 import { ensureInvoice } from './invoice-core';
 
 /**
- * Recorrentes sem fim (ADR-0004): ocorrências até o mês atual são GRAVADAS
- * (preguiçosamente, na primeira leitura do mês); meses futuros são PROJEÇÕES
- * calculadas da regra, com id "p_<itemId>_<YYYY-MM>", gravadas quando alguém mexe nelas.
+ * Recorrentes sem fim (ADR-0004): cobranças até o mês atual são GRAVADAS
+ * (preguiçosamente, na primeira leitura do mês), mesmo que a fatura delas seja de um
+ * mês futuro; cobranças futuras são PROJEÇÕES calculadas da regra, com id
+ * "p_<itemId>_<mês da fatura/competência>", gravadas quando alguém mexe nelas.
  */
 
 type ItemRec = typeof items.$inferSelect;
@@ -40,7 +41,7 @@ export function slotFor(item: ItemRec, account: AccountRec | null, chargeMonth: 
   return { chargeMonth, competenceMonth: chargeMonth, dueDate: item.dueDay ? dateInMonth(chargeMonth, item.dueDay) : null };
 }
 
-async function invoiceOverrides(tx: Tx, accountId: string | null) {
+export async function invoiceOverrides(tx: Tx, accountId: string | null) {
   if (!accountId) return new Map<Month, { closingDate: ISODate; dueDate: ISODate }>();
   const rows = await tx.query.invoices.findMany({ where: eq(invoices.accountId, accountId), columns: { referenceMonth: true, closingDate: true, dueDate: true } });
   return new Map(rows.map((r) => [r.referenceMonth, { closingDate: r.closingDate, dueDate: r.dueDate }]));
@@ -93,8 +94,8 @@ export async function chargeMonthFor(tx: Tx, item: ItemRec, month: Month): Promi
 }
 
 /**
- * Grava as ocorrências de recorrentes que já chegaram (competência ≤ mês atual).
- * Idempotente: roda em toda leitura de mês e no job de avisos.
+ * Grava as ocorrências de recorrentes cuja cobrança já chegou (mês do gasto ≤ mês atual),
+ * inclusive no crédito com fatura futura. Idempotente: roda em toda leitura de mês e no job de avisos.
  */
 export async function ensureMaterialized(tx: Tx, walletId: string, clock: Clock): Promise<void> {
   const recs = await activeRecurring(tx, walletId);
@@ -106,7 +107,7 @@ export async function ensureMaterialized(tx: Tx, walletId: string, clock: Clock)
     const overrides = await invoiceOverrides(tx, item.method === 'credit' ? item.accountId : null);
     for (const m of chargeMonths(item, item.startMonth, clock.currentMonth)) {
       const slot = slotFor(item, account, m, overrides);
-      if (slot.competenceMonth > clock.currentMonth || have.has(slot.competenceMonth)) continue;
+      if (have.has(slot.competenceMonth)) continue;
       await insertSlot(tx, item, account, slot);
       have.add(slot.competenceMonth);
     }
@@ -121,7 +122,7 @@ async function insertSlot(tx: Tx, item: ItemRec, account: AccountRec | null, slo
   const expectedCents = await nextAmount(tx, item);
   const [row] = await tx
     .insert(occurrences)
-    .values({ walletId: item.walletId, itemId: item.id, competenceMonth: slot.competenceMonth, expectedCents, dueDate: slot.dueDate, invoiceId })
+    .values({ walletId: item.walletId, itemId: item.id, competenceMonth: slot.competenceMonth, chargeMonth: slot.chargeMonth, expectedCents, dueDate: slot.dueDate, invoiceId })
     .onConflictDoNothing()
     .returning({ id: occurrences.id });
   if (row) return row.id;
@@ -137,21 +138,27 @@ export interface ProjectedSlot extends Slot {
   expectedCents: number;
 }
 
-/** Projeções (não gravadas) de recorrentes para um mês futuro. */
-export async function projectionsFor(tx: Tx, walletId: string, month: Month, clock: Clock): Promise<ProjectedSlot[]> {
+/**
+ * Projeções (não gravadas) de recorrentes num mês futuro.
+ * - `by: 'charge'` (tabela): as cobranças cujo mês do gasto é `month`;
+ * - `by: 'competence'` (faturas, id da projeção): as que caem na fatura/competência `month`.
+ * Cobranças até o mês atual já estão gravadas (`ensureMaterialized`).
+ */
+export async function projectionsFor(tx: Tx, walletId: string, month: Month, clock: Clock, by: 'charge' | 'competence' = 'competence'): Promise<ProjectedSlot[]> {
   if (month <= clock.currentMonth) return [];
   const out: ProjectedSlot[] = [];
   for (const item of await activeRecurring(tx, walletId)) {
     // No crédito a competência pode ser até 2 meses depois da cobrança.
-    const months = chargeMonths(item, addMonths(month, -2), month);
+    const months = by === 'charge' ? chargeMonths(item, month, month) : chargeMonths(item, addMonths(month, -2), month);
     if (months.length === 0) continue;
     const account = item.accountId ? ((await tx.query.accounts.findFirst({ where: eq(accounts.id, item.accountId) })) ?? null) : null;
     const overrides = await invoiceOverrides(tx, item.method === 'credit' ? item.accountId : null);
     for (const m of months) {
       const slot = slotFor(item, account, m, overrides);
-      if (slot.competenceMonth !== month) continue;
+      if (by === 'competence' && slot.competenceMonth !== month) continue;
+      if (slot.chargeMonth <= clock.currentMonth) continue; // já gravada
       const exists = await tx.query.occurrences.findFirst({
-        where: and(eq(occurrences.itemId, item.id), eq(occurrences.competenceMonth, month), isNull(occurrences.installmentNumber)),
+        where: and(eq(occurrences.itemId, item.id), eq(occurrences.competenceMonth, slot.competenceMonth), isNull(occurrences.installmentNumber)),
         columns: { id: true },
       });
       if (exists) continue;

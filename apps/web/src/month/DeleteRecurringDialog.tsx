@@ -3,6 +3,7 @@ import { formatMonthLong, type OccurrenceRow } from '@ff/shared';
 import { Button, Modal, Notice, errorText, useToast } from '../components/ui';
 import { api } from '../lib/api';
 import { invalidateFinance, walletUrl } from '../lib/queries';
+import { ReimbursementCheckbox } from './EditOccurrenceModal';
 
 type Scope = 'month' | 'following' | 'all';
 
@@ -15,6 +16,7 @@ export function DeleteRecurringDialog({
   walletId,
   row,
   firstMonth,
+  reimbursement,
   onClose,
   onDone,
 }: {
@@ -22,12 +24,16 @@ export function DeleteRecurringDialog({
   row: OccurrenceRow;
   /** Mês de início da recorrência (fora do crédito, "este e os próximos" nele = excluir tudo). */
   firstMonth: string | null;
+  /** Entrada de reembolso vinculada: "Toda a recorrência" oferece excluí-la junto. */
+  reimbursement?: { description: string } | null;
   onClose: () => void;
   onDone: () => void;
 }) {
   const toast = useToast();
   const [scope, setScope] = useState<Scope | null>(null);
   const [busy, setBusy] = useState(false);
+  const [withReimbursement, setWithReimbursement] = useState(true);
+  const alsoReimbursement = !!reimbursement && withReimbursement;
   const [err, setErr] = useState('');
   const W = walletUrl(walletId);
   const credit = row.method === 'credit' || !!row.invoice;
@@ -63,9 +69,9 @@ export function DeleteRecurringDialog({
     try {
       if (scope === 'month') await api.post(`${W}/occurrences/${row.id}/cancel`);
       else if (scope === 'following') await api.post(`${W}/items/${row.itemId}/end`, { occurrenceId: row.id });
-      else await api.del(`${W}/items/${row.itemId}`);
+      else await api.del(`${W}/items/${row.itemId}${alsoReimbursement ? '?withReimbursement=1' : ''}`);
       invalidateFinance(walletId);
-      toast(scope === 'month' ? 'Mês excluído.' : scope === 'following' ? 'Recorrência encerrada.' : 'Lançamento excluído.');
+      toast(scope === 'month' ? 'Mês excluído.' : scope === 'following' ? 'Recorrência encerrada.' : alsoReimbursement ? 'Lançamento e reembolso excluídos.' : 'Lançamento excluído.');
       onDone();
     } catch (e) {
       setErr(errorText(e));
@@ -102,6 +108,7 @@ export function DeleteRecurringDialog({
         ))}
       </fieldset>
       {scope === 'all' && <Notice tone="danger">Os meses já pagos também somem das telas e dos cards. Os pagamentos ficam guardados.</Notice>}
+      {scope === 'all' && reimbursement && <ReimbursementCheckbox description={reimbursement.description} checked={withReimbursement} onChange={setWithReimbursement} />}
       {err && <Notice tone="danger">{err}</Notice>}
     </Modal>
   );

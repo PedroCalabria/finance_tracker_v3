@@ -15,6 +15,20 @@
       "when": 1793846844353,
       "tag": "0001_importacao",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1794189848161,
+      "tag": "0002_pessoas_e_reembolso",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1794197273102,
+      "tag": "0003_mes_do_gasto",
+      "breakpoints": true
     }
   ]
 }

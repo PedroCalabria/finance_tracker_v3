@@ -18,11 +18,12 @@ import {
   type Method,
   type NewSequence,
   type OccurrenceRow,
+  type Person,
 } from '@ff/shared';
-import { Button, DayInput, Field, Modal, MoneyInput, MonthInput, Notice, Segmented, errorText, fieldErrors, useToast } from '../components/ui';
+import { Button, DayInput, Field, Modal, MoneyInput, MonthInput, Notice, PersonSelect, Segmented, StepperInput, errorText, fieldErrors, useToast } from '../components/ui';
 import { ApiError, api } from '../lib/api';
 import { todayISO } from '../lib/hooks';
-import { invalidateFinance, useAccounts, useCategories, useInvoicePreview, walletUrl } from '../lib/queries';
+import { invalidateFinance, useAccounts, useCategories, useInvoicePreview, usePeople, walletUrl } from '../lib/queries';
 
 /** Contexto da edição: a linha aberta, o item dela e os pedaços que só existem ao editar. */
 export interface EditContext {
@@ -56,8 +57,12 @@ const fieldError = (message: string, field: string) => Object.assign(new Error(m
  * - recorrente: "Mês de início" + dia (do pagamento, opcional; do recebimento ou da
  *   cobrança, obrigatório).
  * No cadastro, "Já foi pago?" tem padrão pela regra: única no pix/débito com data até
- * hoje nasce paga; parcelas e recorrentes começam como promessa. Nas entradas únicas, a
- * própria data é a do recebimento (e do lembrete).
+ * hoje nasce paga; recorrentes começam como promessa. Na parcelada, a pergunta é sobre as
+ * parcelas de meses anteriores (padrão Sim) e só aparece se houver alguma. Nas entradas
+ * únicas, a própria data é a do recebimento (e do lembrete).
+ * Responsável: na entrada e na edição, o seletor (padrão "Eu"); no cadastro de despesa, o
+ * checkbox "Gasto de outra pessoa", que também cria a entrada de reembolso.
+ * Parcelada no cadastro de despesa abre no Crédito enquanto a pessoa não escolher o método.
  * Na edição, mudar tipo, forma, parcelas, total, cartão, o mês de início, o dia da
  * cobrança ou a data de uma parcela recria os meses; os meses pagos ficam no lugar equivalente
  * (o servidor recusa se não houver lugar para eles).
@@ -69,7 +74,9 @@ export function ItemFormModal(props: Props) {
   const qc = useQueryClient();
   const categories = useCategories(walletId);
   const accounts = useAccounts(walletId);
+  const people = usePeople(walletId);
   const today = todayISO();
+  const currentMonth = (!e && props.currentMonth) || monthOf(today);
 
   const initialType: ItemType = e ? e.item.type : props.type;
   const initialMethod: Method = e ? e.item.method : initialType === 'income' ? 'transfer' : 'pix';
@@ -105,6 +112,13 @@ export function ItemFormModal(props: Props) {
   const [note, setNote] = useState(e?.row.note ?? '');
   const [paidTouched, setPaidTouched] = useState(false);
   const [alreadyPaid, setAlreadyPaid] = useState(false);
+  // Parcelada: "As parcelas de meses anteriores já foram pagas?" (padrão Sim).
+  const [pastPaid, setPastPaid] = useState(true);
+  const [methodTouched, setMethodTouched] = useState(false);
+  // Responsável ('' = "Eu") e o cadastro rápido de pessoa; no cadastro de despesa, pelo checkbox.
+  const [personId, setPersonId] = useState(e?.item.person?.id ?? '');
+  const [newPerson, setNewPerson] = useState<string | null>(null);
+  const [thirdParty, setThirdParty] = useState(false);
   const [newCategory, setNewCategory] = useState<string | null>(null);
   const [newAccount, setNewAccount] = useState<NewAccount | null>(null);
   const [busy, setBusy] = useState(false);
@@ -127,6 +141,13 @@ export function ItemFormModal(props: Props) {
   // Na recorrente no crédito, a fatura do mês de início sai do dia da cobrança.
   const previewDate = recurring ? (day ? dateInMonth(startMonth, day) : '') : date;
   const preview = useInvoicePreview(walletId, credit && !newAccount && previewDate ? accountId : null, previewDate);
+  // Parcelada no cadastro: a 1ª parcela cai antes do mês atual? (no crédito, pela fatura da compra)
+  const firstParcelMonth = form !== 'installment' ? null : credit ? (preview.data?.referenceMonth ?? null) : date ? monthOf(date) : null;
+  const hasPastParcels = !e && !!firstParcelMonth && firstParcelMonth < currentMonth;
+  const hasCard = (accounts.data ?? []).some((a) => a.kind === 'credit_card' && !a.archived);
+  // Responsável: sempre na entrada e na edição; no cadastro de despesa, só com "Gasto de outra pessoa".
+  const showPerson = income || !!e || thirdParty;
+  const reimbursing = !e && !income && thirdParty;
 
   // Única: "data" e "data p/ pagamento" (nas entradas, as duas vêm da data do recebimento).
   const typeOrFormChanged = !!e && (type !== e.item.type || form !== e.item.form);
@@ -229,6 +250,8 @@ export function ItemFormModal(props: Props) {
     if (recurring && !startMonth) return setErr(fieldError('Informe o mês de início.', 'startMonth'));
     if (recurring && day == null && (credit || income)) return setErr(fieldError(credit ? 'Informe o dia da cobrança.' : 'Informe o dia do recebimento.', 'day'));
     if (recurring && day != null && (day < 1 || day > 31)) return setErr(fieldError('Dia entre 1 e 31.', 'day'));
+    if (reimbursing && recurring && !credit && day == null) return setErr(fieldError('Informe o dia: o reembolso usa o mesmo dia.', 'day'));
+    if (reimbursing && !personId && !newPerson?.trim()) return setErr(fieldError('Escolha a pessoa.', 'personId'));
     if (!recurring && !(nonCreditParcel && e) && !date && !(income && e && receipt)) return setErr(fieldError('Informe a data.', 'date'));
     setBusy(true);
     try {
@@ -240,6 +263,15 @@ export function ItemFormModal(props: Props) {
         await qc.invalidateQueries({ queryKey: ['categories', walletId] });
         setCategoryId(c.id);
         setNewCategory(null);
+      }
+      let pid = showPerson ? personId || null : null;
+      if (showPerson && newPerson?.trim()) {
+        const created = await api.post<Person>(`${walletUrl(walletId)}/people`, { name: newPerson.trim() });
+        pid = created.id;
+        // Guarda a escolha: se o lançamento falhar, salvar de novo não cria a pessoa duas vezes.
+        await qc.invalidateQueries({ queryKey: ['people', walletId] });
+        setPersonId(created.id);
+        setNewPerson(null);
       }
       let accId = accountId || null;
       if (newAccount) {
@@ -267,6 +299,7 @@ export function ItemFormModal(props: Props) {
           occurrenceId: e.row.id,
           occurrenceCents: editingParcel && occAmount ? occAmount : undefined,
           note: note.trim() || null,
+          personId: pid,
           version: e.row.version,
         });
       } else {
@@ -274,12 +307,15 @@ export function ItemFormModal(props: Props) {
           ...common,
           categoryId: catId ?? undefined,
           ...sentDates,
-          alreadyPaid: credit ? undefined : alreadyPaid,
+          alreadyPaid: credit || form === 'installment' ? undefined : alreadyPaid,
+          pastInstallmentsPaid: form === 'installment' && hasPastParcels ? pastPaid : undefined,
+          personId: pid ?? undefined,
+          createReimbursement: reimbursing || undefined,
           note: note.trim() || undefined,
         });
       }
       invalidateFinance(walletId);
-      toast(e ? 'Alterações salvas.' : income ? 'Entrada adicionada.' : 'Despesa adicionada.');
+      toast(e ? 'Alterações salvas.' : income ? 'Entrada adicionada.' : reimbursing ? 'Despesa e reembolso adicionados.' : 'Despesa adicionada.');
       onClose();
     } catch (ex) {
       setErr(ex);
@@ -349,7 +385,10 @@ export function ItemFormModal(props: Props) {
         <Segmented
           label="Forma"
           value={form}
-          onChange={setForm}
+          onChange={(f) => {
+            setForm(f);
+            if (!e && !income && !methodTouched) setMethod(f === 'installment' && hasCard ? 'credit' : 'pix');
+          }}
           options={[
             { value: 'single', label: 'Única' },
             { value: 'installment', label: 'Parcelada' },
@@ -368,7 +407,7 @@ export function ItemFormModal(props: Props) {
         </Field>
         {form === 'installment' ? (
           <Field label="Número de parcelas" htmlFor="it-inst" error={errFields.installments}>
-            <input id="it-inst" className="ff-input" inputMode="numeric" value={installments} onChange={(ev) => setInstallments(ev.target.value.replace(/\D/g, '').slice(0, 3))} />
+            <StepperInput id="it-inst" value={installments} onChange={setInstallments} min={2} max={120} incLabel="Aumentar parcelas" decLabel="Diminuir parcelas" />
           </Field>
         ) : recurring ? (
           <Field label="Mês de início" htmlFor="it-start" error={errFields.startMonth} hint={e ? 'Mudar o mês de início recria os meses.' : undefined}>
@@ -381,7 +420,7 @@ export function ItemFormModal(props: Props) {
         )}
       </div>
       {recurring && (
-        <Field label={dayLabel} optional={!credit && !income} htmlFor="it-day" error={errFields.day} hint={dayHint}>
+        <Field label={dayLabel} optional={!credit && !income && !reimbursing} htmlFor="it-day" error={errFields.day} hint={reimbursing && !credit ? 'O reembolso usa o mesmo dia.' : dayHint}>
           <DayInput id="it-day" value={day} onChange={setDay} />
         </Field>
       )}
@@ -415,7 +454,15 @@ export function ItemFormModal(props: Props) {
       )}
       <div className="app-grid2">
         <Field label="Método" htmlFor="it-method" error={errFields.method}>
-          <select id="it-method" className="ff-select" value={method} onChange={(ev) => setMethod(ev.target.value as Method)}>
+          <select
+            id="it-method"
+            className="ff-select"
+            value={method}
+            onChange={(ev) => {
+              setMethodTouched(true);
+              setMethod(ev.target.value as Method);
+            }}
+          >
             {methods.map((m) => (
               <option key={m} value={m}>
                 {METHOD_LABEL[m]}
@@ -487,10 +534,11 @@ export function ItemFormModal(props: Props) {
         </fieldset>
       )}
       {credit && accountOptions.length === 0 && !newAccount && <Notice tone="danger">Cadastre um cartão para lançar no crédito: escolha "+ Novo cartão" acima.</Notice>}
-      {credit && preview.data && (
+      {credit && preview.data && previewDate && (
         <Notice>
-          Vai para a fatura de {formatMonthShort(preview.data.referenceMonth, true)}, que vence em {formatDateBR(preview.data.dueDate)}
-          {form === 'installment' ? '. As outras parcelas vão para as faturas seguintes.' : '.'}
+          Conta como gasto de {formatMonthShort(monthOf(previewDate), true)}
+          {form === 'installment' ? ' (e as outras parcelas nos meses seguintes)' : ''}. Vai para a fatura de {formatMonthShort(preview.data.referenceMonth, true)}, que vence em{' '}
+          {formatDateBR(preview.data.dueDate)}.
         </Notice>
       )}
       {structural && (
@@ -535,7 +583,41 @@ export function ItemFormModal(props: Props) {
           </span>
         )}
       </Field>
-      {!credit && !e && (
+      {!e && !income && (
+        <label className="app-checkbox">
+          <input
+            type="checkbox"
+            checked={thirdParty}
+            onChange={(ev) => {
+              setThirdParty(ev.target.checked);
+              if (!ev.target.checked) setNewPerson(null);
+            }}
+          />
+          Gasto de outra pessoa
+        </label>
+      )}
+      {showPerson && (
+        <Field
+          label={reimbursing ? 'Quem é a pessoa' : 'Responsável'}
+          htmlFor="it-person"
+          error={errFields.personId}
+          hint={reimbursing ? 'Também é criada uma entrada "Gasto de terceiros" com o mesmo valor, para acompanhar o reembolso.' : undefined}
+        >
+          <PersonSelect
+            id="it-person"
+            people={people.data ?? []}
+            value={personId}
+            onChange={setPersonId}
+            newName={newPerson}
+            onNewName={setNewPerson}
+            allowMe={!reimbursing}
+            current={e?.item.person}
+          />
+        </Field>
+      )}
+      {e?.item.reimbursement && <p className="ff-caption app-m0">Reembolso: {e.item.reimbursement.description} (entrada vinculada)</p>}
+      {e?.item.reimburses && <p className="ff-caption app-m0">Reembolso de {e.item.reimburses.description} (despesa vinculada)</p>}
+      {!credit && !e && form !== 'installment' && (
         <Field label={income ? 'Já foi recebido?' : 'Já foi pago?'}>
           <Segmented
             label={income ? 'Já foi recebido?' : 'Já foi pago?'}
@@ -544,6 +626,19 @@ export function ItemFormModal(props: Props) {
               setPaidTouched(true);
               setAlreadyPaid(v === 'yes');
             }}
+            options={[
+              { value: 'yes', label: 'Sim' },
+              { value: 'no', label: 'Não' },
+            ]}
+          />
+        </Field>
+      )}
+      {hasPastParcels && (
+        <Field label={income ? 'As parcelas de meses anteriores já foram recebidas?' : 'As parcelas de meses anteriores já foram pagas?'}>
+          <Segmented
+            label={income ? 'As parcelas de meses anteriores já foram recebidas?' : 'As parcelas de meses anteriores já foram pagas?'}
+            value={pastPaid ? 'yes' : 'no'}
+            onChange={(v) => setPastPaid(v === 'yes')}
             options={[
               { value: 'yes', label: 'Sim' },
               { value: 'no', label: 'Não' },

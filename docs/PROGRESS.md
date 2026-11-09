@@ -1,6 +1,6 @@
 # Progresso da implementação
 
-Atualizado em 05/11/2026. Fase 1 da especificação implementada; o que falta para colocar no ar depende de contas e chaves que só o dono do projeto pode criar.
+Atualizado em 09/11/2026. Fase 1 da especificação implementada; o que falta para colocar no ar depende de contas e chaves que só o dono do projeto pode criar.
 
 ## Etapas da fase 1
 | # | Etapa | Estado | Onde |
@@ -20,7 +20,7 @@ Atualizado em 05/11/2026. Fase 1 da especificação implementada; o que falta pa
 | Importação de extrato e fatura com conciliação: extrato e fatura Ourocard do BB em PDF, OFX de conta | Pronta | `packages/shared/src/imports/`, `apps/server/src/{imports,domain/imports}/`, `pages/ImportPage`, ADR-0010 |
 
 ## Verificação
-- 73 testes unitários (`packages/shared`) + 106 de integração (`apps/server/test`): migrações simultâneas (API e worker), leitores de importação (fixtures anonimizadas), autenticação (inclusive renovação sem o cookie de acesso e corrida entre abas), cadastros, edição de lançamentos (inclusive estrutural com meses pagos), parcelas, recorrentes e projeções, exclusão de recorrente por alcance, importação e conciliação (extrato, fatura, senha, reimportação), pagamentos, faturas, resumo, concorrência, comprovantes (EXIF, cifragem, tipos), avisos (horário, fuso, dia útil, feriado, idempotência).
+- 85 testes unitários (`packages/shared`) + 143 de integração (`apps/server/test`): mês do gasto (inclusive o backfill da migração), pessoas e reembolso de gasto de terceiros, parcelas de meses anteriores (inclusive faturas passadas), migrações simultâneas (API e worker), leitores de importação (fixtures anonimizadas), autenticação (inclusive renovação sem o cookie de acesso e corrida entre abas), cadastros, edição de lançamentos (inclusive estrutural com meses pagos), parcelas, recorrentes e projeções, exclusão de recorrente por alcance, importação e conciliação (extrato, fatura, senha, reimportação), pagamentos, faturas, resumo, concorrência, comprovantes (EXIF, cifragem, tipos), avisos (horário, fuso, dia útil, feriado, idempotência).
 - Roteiro completo no navegador em 1440px, 1920px, 900px e celular, claro e escuro.
 - Passos do Dockerfile reproduzidos numa cópia limpa (o ambiente de desenvolvimento não tinha Docker).
 
@@ -49,6 +49,16 @@ Atualizado em 05/11/2026. Fase 1 da especificação implementada; o que falta pa
 
 ## Ajustes de 06/11/2026
 - **Edição estrutural preserva os meses pagos:** transformar uma única paga (por exemplo, importada do extrato) em recorrente ou parcelada, mudar o mês de início, a data de uma parcela ou o nº de parcelas não é mais recusado só por ter pagamento. A ocorrência paga fica, com pagamentos, comprovantes e vínculo do extrato, e vai para o lugar equivalente da sequência nova. A recusa (`payments_not_movable`) só vale quando não há lugar, com a mensagem dizendo o porquê. O formulário avisa antes de salvar com a mesma regra (`paidTargets`, ADR-0004).
+
+## Ajustes de 08/11/2026
+- **Pessoas e responsável:** cadastro de pessoas por carteira (aba "Pessoas" em Categorias); cada lançamento tem um responsável ("Eu" por padrão), com coluna "Responsável" na tabela (ADR-0004, ADR-0009).
+- **Gasto de outra pessoa:** no cadastro de despesa, o checkbox cria na mesma transação a entrada de reembolso ("Gasto de terceiros"), com as datas de quando a despesa é paga (no crédito, os vencimentos das faturas). Vinculada só para exibir e excluir junto (ADR-0004).
+- **Compra parcelada antiga:** "As parcelas de meses anteriores já foram pagas?" (padrão Sim) quita as parcelas de competência anterior ao mês atual; no crédito, paga as faturas passadas que só têm essa compra (ADR-0004, ADR-0005).
+- **Formulário:** parcelada abre no Crédito; número de parcelas com setas (`StepperInput`).
+- **Cards do mês:** o previsto em destaque e o realizado embaixo (`forecastCents` no resumo).
+
+## Ajustes de 09/11/2026
+- **Gastos no mês da compra:** compras no crédito passam a aparecer e contar no mês em que foram feitas (mês do gasto, `charge_month`), não no mês da fatura; a fatura continua pelo vencimento e o bloco mostra o período das compras. Recorrentes no crédito são gravadas quando a cobrança chega. Cards: gastos = consumo do mês; "Na conta até agora" = caixa (inclui faturas pagas). Reembolso de terceiros no mesmo mês do gasto. Backfill dos lançamentos existentes na migração `0003` (ADR-0004, ADR-0005, ADR-0009).
 
 ## Observações para as próximas etapas
 - **Carteira familiar:** criar `POST /wallets`, convites (`/wallets/:id/invites`, `/invites/:token/accept`) e um seletor de carteira na interface; as rotas financeiras já são por carteira. O resumo diário já percorre todas as carteiras da pessoa.

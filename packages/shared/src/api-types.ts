@@ -19,6 +19,12 @@ export interface Category {
   archived: boolean;
 }
 
+export interface Person {
+  id: string;
+  name: string;
+  archived: boolean;
+}
+
 export interface Account {
   id: string;
   name: string;
@@ -55,9 +61,14 @@ export interface OccurrenceRow {
   systemKind: SystemKind | null;
   description: string;
   category: { id: string; name: string } | null;
+  /** Responsável; nulo = "Eu". */
+  person: { id: string; name: string } | null;
   method: Method;
   account: { id: string; name: string; bank: string; kind: AccountKind } | null;
+  /** Mês da ocorrência; no crédito, o mês da fatura. */
   competenceMonth: Month;
+  /** Mês do gasto: no crédito, o mês da compra ou da cobrança; fora dele, igual a `competenceMonth`. */
+  chargeMonth: Month;
   installmentNumber: number | null;
   installmentsTotal: number | null;
   /** "Única", "Recorrente" ou "3/5". */
@@ -93,6 +104,12 @@ export interface ItemDetail {
   entryDate: ISODate;
   categoryId: string | null;
   accountId: string | null;
+  /** Responsável; nulo = "Eu". */
+  person: { id: string; name: string } | null;
+  /** Despesa: a entrada de reembolso vinculada (enquanto não excluída). */
+  reimbursement: { id: string; description: string } | null;
+  /** Entrada de reembolso: a despesa que a gerou (enquanto não excluída). */
+  reimburses: { id: string; description: string } | null;
   startMonth: Month;
   endMonth: Month | null;
   occurrences: OccurrenceRow[];
@@ -101,8 +118,10 @@ export interface ItemDetail {
 export interface Summary {
   month: Month;
   isCurrentMonth: boolean;
-  income: { receivedCents: number; pendingCents: number; lateCents: number };
-  expense: { paidCents: number; pendingCents: number; lateCents: number };
+  /** `forecastCents` = recebido + a receber (o previsto do mês). */
+  income: { receivedCents: number; pendingCents: number; lateCents: number; forecastCents: number };
+  /** `forecastCents` = pago + a pagar (o previsto do mês). */
+  expense: { paidCents: number; pendingCents: number; lateCents: number; forecastCents: number };
   balance: { realizedCents: number; forecastCents: number };
 }
 
@@ -112,6 +131,9 @@ export interface InvoiceRow {
   referenceMonth: Month;
   closingDate: ISODate;
   dueDate: ISODate;
+  /** Período das compras desta fatura: do fechamento da anterior até a véspera do fechamento desta. */
+  purchasesFrom: ISODate;
+  purchasesTo: ISODate;
   status: InvoiceStatus;
   /** Calculado: em aberto com vencimento passado. */
   late: boolean;

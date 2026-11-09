@@ -7,16 +7,26 @@ import { invalidateFinance, useItem, walletUrl } from '../lib/queries';
 
 /**
  * Tabela do mês no computador (design system: OccurrenceTable). Colunas na ordem
- * da especificação; o valor vem depois de Parcela.
+ * da especificação; o valor vem depois de Parcela e o Responsável depois de Categoria.
  */
 
-type SortKey = 'description' | 'category' | 'value' | 'due';
+type SortKey = 'description' | 'category' | 'person' | 'value' | 'due';
+/** Responsável: nulo = "Eu". */
+const personName = (r: OccurrenceRow) => r.person?.name ?? 'Eu';
 const canPay = (r: OccurrenceRow) => !r.invoice && r.method !== 'credit' && !['paid', 'canceled'].includes(r.displayStatus);
 
 function sortRows(rows: OccurrenceRow[], key: SortKey | null, dir: 1 | -1): OccurrenceRow[] {
   if (!key) return rows;
   const val = (r: OccurrenceRow): string | number =>
-    key === 'description' ? r.description.toLowerCase() : key === 'category' ? (r.category?.name ?? '~').toLowerCase() : key === 'value' ? r.expectedCents : (r.dueDate ?? '9999');
+    key === 'description'
+      ? r.description.toLowerCase()
+      : key === 'category'
+        ? (r.category?.name ?? '~').toLowerCase()
+        : key === 'person'
+          ? (r.person?.name ?? '').toLowerCase() // "Eu" ordena como vazio
+          : key === 'value'
+            ? r.expectedCents
+            : (r.dueDate ?? '9999');
   return [...rows].sort((a, b) => (val(a) < val(b) ? -dir : val(a) > val(b) ? dir : 0));
 }
 
@@ -24,8 +34,8 @@ export function OccurrenceTable({ walletId, rows, onPay, onOpen }: { walletId: s
   const [sort, setSort] = useState<{ key: SortKey | null; dir: 1 | -1 }>({ key: null, dir: 1 });
   const [open, setOpen] = useState<string | null>(null);
   const sorted = useMemo(() => sortRows(rows, sort.key, sort.dir), [rows, sort]);
-  const th = (label: string, key?: SortKey, num?: boolean) => (
-    <th className={num ? 'is-num' : undefined} aria-sort={key && sort.key === key ? (sort.dir === 1 ? 'ascending' : 'descending') : undefined}>
+  const th = (label: string, key?: SortKey, num?: boolean, cls?: string) => (
+    <th className={[num && 'is-num', cls].filter(Boolean).join(' ') || undefined} aria-sort={key && sort.key === key ? (sort.dir === 1 ? 'ascending' : 'descending') : undefined}>
       {key ? (
         <button type="button" onClick={() => setSort((s) => ({ key, dir: s.key === key ? (s.dir === 1 ? -1 : 1) : 1 }))}>
           {label}
@@ -46,6 +56,7 @@ export function OccurrenceTable({ walletId, rows, onPay, onOpen }: { walletId: s
             </th>
             {th('Serviço', 'description')}
             {th('Categoria', 'category')}
+            {th('Responsável', 'person', false, 'app-col-person')}
             {th('Parcela')}
             {th('Valor', 'value', true)}
             {th(rows[0]?.type === 'income' ? 'Data p/ recebimento' : 'Data p/ pagamento', 'due')}
@@ -89,7 +100,11 @@ export function OccurrenceTable({ walletId, rows, onPay, onOpen }: { walletId: s
                       {r.note && <span className="app-note-inline">{r.note}</span>}
                     </div>
                   </td>
-                  <td className="app-wrap">{r.category?.name ?? '—'}</td>
+                  <td className="app-wrap">
+                    {r.category?.name ?? '—'}
+                    <span className="app-person-inline">{personName(r)}</span>
+                  </td>
+                  <td className="app-wrap app-col-person">{personName(r)}</td>
                   <td>{r.installmentLabel}</td>
                   <td className="is-num">
                     <span className="ff-value">
@@ -171,7 +186,7 @@ function Subgrid({ walletId, row }: { walletId: string; row: OccurrenceRow }) {
   const item = useItem(walletId, row.itemId);
   return (
     <tr className="ff-subgrid">
-      <td colSpan={10} style={{ paddingLeft: 56 }}>
+      <td colSpan={11} style={{ paddingLeft: 56 }}>
         {item.isPending ? (
           <Loading />
         ) : item.data ? (
@@ -195,7 +210,8 @@ function Subgrid({ walletId, row }: { walletId: string; row: OccurrenceRow }) {
                 const paid = o.payments.at(-1);
                 return (
                   <tr key={o.id}>
-                    <td>{item.data!.form === 'installment' ? o.installmentLabel : formatMonthShort(o.competenceMonth, true)}</td>
+                    {/* Recorrente no crédito: o mês da cobrança (mês do gasto), não o da fatura. */}
+                    <td>{item.data!.form === 'installment' ? o.installmentLabel : formatMonthShort(o.chargeMonth, true)}</td>
                     <td className="ff-num">{dateBR(o.dueDate)}</td>
                     <td className="is-num">{brl(o.paidCents && o.displayStatus === 'paid' ? o.paidCents : o.expectedCents)}</td>
                     <td>
@@ -222,7 +238,7 @@ export function OccurrenceList({ rows, onPay, onOpen }: { rows: OccurrenceRow[];
         return (
           <article key={r.id} className="ff-occ" onClick={() => onOpen(r)} style={{ cursor: 'pointer' }}>
             <p className="ff-occ__kicker">
-              {[r.category?.name, r.form === 'installment' ? `Parcela ${r.installmentLabel}` : r.installmentLabel === 'Única' ? null : r.installmentLabel].filter(Boolean).join(' · ') || 'Única'}
+              {[r.category?.name, r.person?.name, r.form === 'installment' ? `Parcela ${r.installmentLabel}` : r.installmentLabel === 'Única' ? null : r.installmentLabel].filter(Boolean).join(' · ') || 'Única'}
               {r.projected ? ' · Previsto' : ''}
             </p>
             <p className="ff-occ__name">

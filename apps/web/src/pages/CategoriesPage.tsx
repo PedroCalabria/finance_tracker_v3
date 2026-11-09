@@ -1,56 +1,95 @@
 import { useState, type FormEvent } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import type { Category, ItemType } from '@ff/shared';
+import type { ItemType } from '@ff/shared';
 import { Button, ConfirmDialog, Field, IconButton, Loading, Modal, Segmented, errorText, useToast } from '../components/ui';
 import { api } from '../lib/api';
-import { useCategories, walletUrl } from '../lib/queries';
+import { useCategories, usePeople, walletUrl } from '../lib/queries';
 
-/** Etapa 2 — categorias criadas pela pessoa, separadas entre despesas e entradas. */
+type Tab = ItemType | 'people';
+interface Entry {
+  id: string;
+  name: string;
+}
+
+/** Textos e rota de cada aba: categorias (por tipo) ou pessoas (o responsável dos lançamentos). */
+const KIND = {
+  category: {
+    path: 'categories',
+    created: 'Categoria criada.',
+    renameTitle: 'Renomear categoria',
+    removeMessage: 'Se houver lançamentos com essa categoria, ela só sai da lista de escolha. Os lançamentos antigos continuam como estão.',
+    archived: 'Categoria arquivada: os lançamentos antigos continuam com ela.',
+    removed: 'Categoria removida.',
+  },
+  person: {
+    path: 'people',
+    created: 'Pessoa cadastrada.',
+    renameTitle: 'Renomear pessoa',
+    removeMessage: 'Se essa pessoa for responsável por algum lançamento, ela só sai da lista de escolha. Os lançamentos antigos continuam com ela.',
+    archived: 'Pessoa arquivada: os lançamentos antigos continuam com ela.',
+    removed: 'Pessoa removida.',
+  },
+} as const;
+type Kind = (typeof KIND)[keyof typeof KIND];
+
+/** Etapa 2 — categorias criadas pela pessoa, separadas entre despesas e entradas, e as pessoas da carteira. */
 export function CategoriesPage({ walletId }: { walletId: string }) {
   const cats = useCategories(walletId);
+  const people = usePeople(walletId);
   const qc = useQueryClient();
   const toast = useToast();
-  const [type, setType] = useState<ItemType>('expense');
+  const [tab, setTab] = useState<Tab>('expense');
   const [name, setName] = useState('');
   const [err, setErr] = useState('');
-  const [editing, setEditing] = useState<Category | null>(null);
-  const [removing, setRemoving] = useState<Category | null>(null);
-  const refresh = () => qc.invalidateQueries({ queryKey: ['categories', walletId] });
+  const [editing, setEditing] = useState<Entry | null>(null);
+  const [removing, setRemoving] = useState<Entry | null>(null);
+  const isPeople = tab === 'people';
+  const kind: Kind = isPeople ? KIND.person : KIND.category;
+  const refresh = () => qc.invalidateQueries({ queryKey: [isPeople ? 'people' : 'categories', walletId] });
 
   async function add(e: FormEvent) {
     e.preventDefault();
     setErr('');
     try {
-      await api.post(`${walletUrl(walletId)}/categories`, { name, type });
+      await api.post(`${walletUrl(walletId)}/${kind.path}`, isPeople ? { name } : { name, type: tab });
       setName('');
       await refresh();
-      toast('Categoria criada.');
+      toast(kind.created);
     } catch (e2) {
       setErr(errorText(e2));
     }
   }
 
-  const list = (cats.data ?? []).filter((c) => c.type === type);
+  const list: Entry[] = isPeople ? (people.data ?? []) : (cats.data ?? []).filter((c) => c.type === tab);
+  const pending = isPeople ? people.isPending : cats.isPending;
+  const title = isPeople ? 'Pessoas' : tab === 'expense' ? 'Categorias de despesa' : 'Categorias de entrada';
   return (
     <div className="app-content">
       <div className="app-pagehead">
         <h1 className="app-pagehead__title">Categorias</h1>
         <Segmented
-          label="Tipo de categoria"
-          value={type}
-          onChange={setType}
+          label="O que cadastrar"
+          value={tab}
+          onChange={(t) => {
+            setTab(t);
+            setErr('');
+          }}
           options={[
             { value: 'expense', label: 'Despesas' },
             { value: 'income', label: 'Entradas' },
+            { value: 'people', label: 'Pessoas' },
           ]}
         />
       </div>
       <section className="ff-card">
         <header className="ff-card__header">
-          <h2 className="ff-card__title">{type === 'expense' ? 'Categorias de despesa' : 'Categorias de entrada'}</h2>
+          <h2 className="ff-card__title">{title}</h2>
           <span className="ff-caption">{list.length}</span>
         </header>
-        {cats.isPending ? (
+        {isPeople && (
+          <p className="ff-caption app-list-row">O responsável de cada despesa ou entrada. Sem pessoa, o lançamento é seu ("Eu").</p>
+        )}
+        {pending ? (
           <Loading />
         ) : (
           list.map((c) => (
@@ -64,23 +103,31 @@ export function CategoriesPage({ walletId }: { walletId: string }) {
           ))
         )}
         <form className="app-inline-form" onSubmit={add}>
-          <Field label="Nova categoria" htmlFor="new-cat" error={err}>
-            <input id="new-cat" className="ff-input" value={name} onChange={(e) => setName(e.target.value)} placeholder={type === 'expense' ? 'Ex.: Farmácia' : 'Ex.: Aluguel recebido'} />
+          <Field label={isPeople ? 'Nova pessoa' : 'Nova categoria'} htmlFor="new-cat" error={err}>
+            <input
+              id="new-cat"
+              className="ff-input"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              maxLength={60}
+              placeholder={isPeople ? 'Ex.: Maria' : tab === 'expense' ? 'Ex.: Farmácia' : 'Ex.: Aluguel recebido'}
+            />
           </Field>
           <Button type="submit" variant="primary" icon="plus" disabled={!name.trim()}>
             Adicionar
           </Button>
         </form>
       </section>
-      {editing && <RenameModal walletId={walletId} cat={editing} onClose={() => setEditing(null)} onDone={refresh} />}
+      {editing && <RenameModal walletId={walletId} kind={kind} entry={editing} onClose={() => setEditing(null)} onDone={refresh} />}
       {removing && (
-        <RemoveCategory
+        <RemoveEntry
           walletId={walletId}
-          cat={removing}
+          kind={kind}
+          entry={removing}
           onClose={() => setRemoving(null)}
           onDone={async (archived) => {
             await refresh();
-            toast(archived ? 'Categoria arquivada: os lançamentos antigos continuam com ela.' : 'Categoria removida.');
+            toast(archived ? kind.archived : kind.removed);
           }}
         />
       )}
@@ -88,14 +135,14 @@ export function CategoriesPage({ walletId }: { walletId: string }) {
   );
 }
 
-function RenameModal({ walletId, cat, onClose, onDone }: { walletId: string; cat: Category; onClose: () => void; onDone: () => void }) {
-  const [name, setName] = useState(cat.name);
+function RenameModal({ walletId, kind, entry, onClose, onDone }: { walletId: string; kind: Kind; entry: Entry; onClose: () => void; onDone: () => void }) {
+  const [name, setName] = useState(entry.name);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   async function save() {
     setBusy(true);
     try {
-      await api.patch(`${walletUrl(walletId)}/categories/${cat.id}`, { name });
+      await api.patch(`${walletUrl(walletId)}/${kind.path}/${entry.id}`, { name });
       onDone();
       onClose();
     } catch (e) {
@@ -105,7 +152,7 @@ function RenameModal({ walletId, cat, onClose, onDone }: { walletId: string; cat
   }
   return (
     <Modal
-      title="Renomear categoria"
+      title={kind.renameTitle}
       onClose={onClose}
       footer={
         <>
@@ -119,19 +166,19 @@ function RenameModal({ walletId, cat, onClose, onDone }: { walletId: string; cat
       }
     >
       <Field label="Nome" htmlFor="cat-name" error={err}>
-        <input id="cat-name" className="ff-input" value={name} onChange={(e) => setName(e.target.value)} autoFocus />
+        <input id="cat-name" className="ff-input" value={name} onChange={(e) => setName(e.target.value)} maxLength={60} autoFocus />
       </Field>
     </Modal>
   );
 }
 
-function RemoveCategory({ walletId, cat, onClose, onDone }: { walletId: string; cat: Category; onClose: () => void; onDone: (archived: boolean) => void }) {
+function RemoveEntry({ walletId, kind, entry, onClose, onDone }: { walletId: string; kind: Kind; entry: Entry; onClose: () => void; onDone: (archived: boolean) => void }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   return (
     <ConfirmDialog
-      title={`Remover "${cat.name}"?`}
-      message="Se houver lançamentos com essa categoria, ela só sai da lista de escolha. Os lançamentos antigos continuam como estão."
+      title={`Remover "${entry.name}"?`}
+      message={kind.removeMessage}
       confirmLabel="Remover"
       busy={busy}
       error={err}
@@ -139,7 +186,7 @@ function RemoveCategory({ walletId, cat, onClose, onDone }: { walletId: string; 
       onConfirm={async () => {
         setBusy(true);
         try {
-          const r = await api.del<{ archived: boolean }>(`${walletUrl(walletId)}/categories/${cat.id}`);
+          const r = await api.del<{ archived: boolean }>(`${walletUrl(walletId)}/${kind.path}/${entry.id}`);
           onDone(r.archived);
           onClose();
         } catch (e) {
@@ -150,4 +197,3 @@ function RemoveCategory({ walletId, cat, onClose, onDone }: { walletId: string; 
     />
   );
 }
-

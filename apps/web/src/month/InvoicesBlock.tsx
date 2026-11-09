@@ -41,6 +41,10 @@ export function InvoicesBlock({ walletId, month, invoices }: { walletId: string;
                   </button>
                 )}
               </p>
+              {/* As compras desta fatura aparecem na tabela no mês em que foram feitas (ADR-0005). */}
+              <p className="ff-invoice__dates">
+                Compras de {dateBR(inv.purchasesFrom, true)} a {dateBR(inv.purchasesTo, true)}
+              </p>
             </div>
             <span className="ff-invoice__amount">{brl(inv.totalCents)}</span>
             {inv.status === 'paid' ? (

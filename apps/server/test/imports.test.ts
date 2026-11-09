@@ -220,7 +220,8 @@ describe('conciliação de extrato', () => {
 
   it('prévia adulterada ou vencida é recusada, e confirmar duas vezes não duplica', async () => {
     const [body, mac] = preview.token.split('.');
-    const forged = `${body.slice(0, -2)}AA.${mac}`;
+    // Troca o 1º caractere (6 bits inteiros): mexer no fim do base64 pode cair só nos bits de preenchimento.
+    const forged = `${body[0] === 'A' ? 'B' : 'A'}${body.slice(1)}.${mac}`;
     const r1 = await c.post(c.w('/imports/confirm'), { token: forged, accountId: conta, decisions: [] });
     expect(r1.json().error.code).toBe('import_preview_invalid');
     env.setNow('2026-11-03T18:00:00Z');
@@ -373,13 +374,21 @@ describe('conciliação de fatura', () => {
     expect(res.json().counts).toMatchObject({ linked: 3, created: 4, ignored: 1 });
     const inv = (await c.get(c.w('/invoices?month=2026-11'))).json().find((i: any) => i.account.id === card && i.referenceMonth === '2026-11');
     expect([inv.closingDate, inv.realAmountCents, inv.status]).toEqual(['2026-10-26', 64329, 'open']);
-    const nov = await occ(c, '2026-11');
-    expect(find(nov, 'COMPRA PERTO').invoice.referenceMonth).toBe('2026-11');
-    const antiga = find(nov, 'LOJA ANTIGA');
-    expect([antiga.installmentLabel, antiga.expectedCents, antiga.note]).toEqual(['1/3', 12000, 'Parcelas 8 a 10 de 10 (importado da fatura)']);
-    expect(find(await occ(c, '2027-01'), 'LOJA ANTIGA').installmentLabel).toBe('3/3');
-    expect(find(nov, 'LOJA NOVA').installmentLabel).toBe('1/3');
-    expect(find(nov, 'IOF DIAR ROT PF').expectedCents).toBe(739);
+    // Na tabela, cada compra fica no mês em que foi feita (out); todas na fatura de nov.
+    const oct = await occ(c, '2026-10');
+    expect(find(oct, 'COMPRA PERTO').invoice.referenceMonth).toBe('2026-11');
+    // "PARC 08/10" de uma compra de março: a 1ª importada é gasta em outubro (março + 7).
+    const antiga = find(oct, 'LOJA ANTIGA');
+    expect([antiga.installmentLabel, antiga.expectedCents, antiga.note, antiga.chargeMonth, antiga.invoice.referenceMonth]).toEqual([
+      '1/3',
+      12000,
+      'Parcelas 8 a 10 de 10 (importado da fatura)',
+      '2026-10',
+      '2026-11',
+    ]);
+    expect(find(await occ(c, '2026-12'), 'LOJA ANTIGA')).toMatchObject({ installmentLabel: '3/3', invoice: expect.objectContaining({ referenceMonth: '2027-01' }) });
+    expect(find(oct, 'LOJA NOVA').installmentLabel).toBe('1/3');
+    expect(find(oct, 'IOF DIAR ROT PF').expectedCents).toBe(739);
     // O valor real gravado vem preenchido no pagamento e cria o ajuste pela diferença.
     const paid = (await c.post(c.w(`/invoices/${inv.id}/payments`), { realAmountCents: inv.realAmountCents, amountCents: 64329, paidAt: '2026-11-03' })).json();
     expect(paid.status).toBe('paid');

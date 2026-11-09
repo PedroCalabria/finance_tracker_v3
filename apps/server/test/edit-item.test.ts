@@ -107,11 +107,12 @@ describe('edição que recria os meses', () => {
   });
   it('trocar o cartão leva a compra para a fatura do outro cartão', async () => {
     await create({ description: 'Fone', amountCents: 25000, date: '2026-11-03', method: 'credit', accountId: bb });
-    const row = find(await occ('2026-12'), 'Fone');
-    expect(row.account.id).toBe(bb);
+    // Compra de nov: fica na tabela de nov, com a fatura de dez.
+    const row = find(await occ('2026-11'), 'Fone');
+    expect([row.account.id, row.invoice.referenceMonth]).toEqual([bb, '2026-12']);
     const res = await edit(row, { accountId: nu });
     expect(res.statusCode).toBe(200);
-    const moved = find(await occ('2026-12'), 'Fone');
+    const moved = find(await occ('2026-11'), 'Fone');
     expect([moved.account.id, moved.invoice.referenceMonth]).toEqual([nu, '2026-12']);
   });
   it('mais parcelas a partir da 2ª: a data dela define a primeira', async () => {

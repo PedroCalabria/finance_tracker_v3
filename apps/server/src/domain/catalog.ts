@@ -1,12 +1,13 @@
 import { and, asc, eq, isNull, sql } from 'drizzle-orm';
-import type { Account, AccountInput, Category, CategoryInput } from '@ff/shared';
+import type { Account, AccountInput, Category, CategoryInput, Person } from '@ff/shared';
 import type { DB, Tx } from '../db/client';
-import { accounts, categories, items } from '../db/schema';
+import { accounts, categories, items, people } from '../db/schema';
 import { AppError, badRequest, notFound } from '../http/errors';
 
-/** Etapa 2 — cadastros de categorias e de contas/cartões. */
+/** Etapa 2 — cadastros de categorias e de contas/cartões; pessoas (o responsável de um lançamento). */
 
 const toCategory = (c: typeof categories.$inferSelect): Category => ({ id: c.id, name: c.name, type: c.type, archived: !!c.archivedAt });
+const toPerson = (p: typeof people.$inferSelect): Person => ({ id: p.id, name: p.name, archived: !!p.archivedAt });
 const toAccount = (a: typeof accounts.$inferSelect): Account => ({
   id: a.id,
   name: a.name,
@@ -69,6 +70,70 @@ export async function removeCategory(db: DB, walletId: string, id: string): Prom
   }
   await db.delete(categories).where(eq(categories.id, id));
   return { archived: false };
+}
+
+// ---- Pessoas: mesmas regras das categorias (nome único entre as ativas; em uso → arquivada).
+
+const duplicatePerson = () => new AppError(409, 'duplicate', 'Já existe uma pessoa com esse nome.', { name: 'Já existe uma pessoa com esse nome.' });
+const personNotFound = () => new AppError(404, 'not_found', 'Pessoa não encontrada.');
+
+export async function listPeople(db: DB, walletId: string, includeArchived = false): Promise<Person[]> {
+  const rows = await db.query.people.findMany({
+    where: and(eq(people.walletId, walletId), includeArchived ? undefined : isNull(people.archivedAt)),
+    orderBy: asc(sql`lower(${people.name})`),
+  });
+  return rows.map(toPerson);
+}
+
+export async function createPerson(db: DB | Tx, walletId: string, name: string): Promise<Person> {
+  try {
+    const [row] = await db.insert(people).values({ walletId, name }).returning();
+    return toPerson(row!);
+  } catch (e) {
+    if (isUniqueViolation(e)) throw duplicatePerson();
+    throw e;
+  }
+}
+
+export async function renamePerson(db: DB, walletId: string, id: string, name: string): Promise<Person> {
+  try {
+    const [row] = await db
+      .update(people)
+      .set({ name, version: sql`${people.version} + 1` })
+      .where(and(eq(people.id, id), eq(people.walletId, walletId)))
+      .returning();
+    if (!row) throw personNotFound();
+    return toPerson(row);
+  } catch (e) {
+    if (isUniqueViolation(e)) throw duplicatePerson();
+    throw e;
+  }
+}
+
+/** Pessoa em uso é arquivada (some dos seletores, continua nos lançamentos); sem uso, é apagada. */
+export async function removePerson(db: DB, walletId: string, id: string): Promise<{ archived: boolean }> {
+  const person = await db.query.people.findFirst({ where: and(eq(people.id, id), eq(people.walletId, walletId)) });
+  if (!person) throw personNotFound();
+  const used = await db.query.items.findFirst({ where: eq(items.personId, id), columns: { id: true } });
+  if (used) {
+    await db.update(people).set({ archivedAt: new Date() }).where(eq(people.id, id));
+    return { archived: true };
+  }
+  await db.delete(people).where(eq(people.id, id));
+  return { archived: false };
+}
+
+/**
+ * Responsável informado num lançamento: da mesma carteira e ativo. Uma pessoa
+ * arquivada só vale se já for a responsável atual (`currentId`, na edição).
+ */
+export async function getPersonChecked(tx: Tx, walletId: string, id: string | null | undefined, currentId: string | null = null) {
+  if (!id) return null;
+  const p = await tx.query.people.findFirst({ where: and(eq(people.id, id), eq(people.walletId, walletId)) });
+  const invalid = (message: string) => new AppError(400, 'validation', message, { personId: message });
+  if (!p) throw invalid('Pessoa não encontrada.');
+  if (p.archivedAt && p.id !== currentId) throw invalid('Essa pessoa foi removida. Escolha outra.');
+  return p;
 }
 
 export async function listAccounts(db: DB, walletId: string, includeArchived = false): Promise<Account[]> {

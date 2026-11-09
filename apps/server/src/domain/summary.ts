@@ -1,4 +1,4 @@
-import { and, eq, isNull, lt, max, min, sql } from 'drizzle-orm';
+import { and, eq, isNull, lt, sql } from 'drizzle-orm';
 import { addMonths, type Month, type MonthsRange, type Summary } from '@ff/shared';
 import type { DB } from '../db/client';
 import { items, occurrences } from '../db/schema';
@@ -7,11 +7,17 @@ import { listInvoices } from './invoices';
 import { listOccurrences } from './occurrences';
 
 /**
- * Cards do mês (ADR-0004), calculados no servidor para a regra ficar num lugar só:
- * - Pago/recebido: pagamentos das ocorrências do mês fora do crédito + pagamentos das faturas do mês.
- * - A pagar/receber: restante das ocorrências do mês + saldo das faturas abertas do mês.
- * - No mês atual, os atrasados de meses anteriores somam em "a pagar" e aparecem em "em atraso".
- * - Sem saldo acumulado entre meses.
+ * Cards do mês (ADR-0004), calculados no servidor para a regra ficar num lugar só.
+ * Gastos = CONSUMO pelo mês do gasto (no crédito, o mês da compra):
+ * - fora do crédito: pagamentos em "pago", restante em "a pagar"; no mês atual, os atrasados de
+ *   meses anteriores somam em "a pagar" e em "em atraso";
+ * - no crédito: a compra inteira em "pago" se a fatura dela está paga ou encerrada; senão, "a pagar".
+ *   Fatura atrasada não entra em "em atraso" (aparece no bloco de faturas);
+ * - fora da conta: pagamentos de fatura (as compras já contaram no mês delas), "Saldo restante da
+ *   fatura" (não é gasto novo) e canceladas. O "Ajuste da fatura" conta no mês da fatura.
+ * Previsto = realizado + o que falta. Balanço previsto = entradas − gastos (consumo).
+ * Balanço realizado = CAIXA ("Na conta até agora"): recebido − (pagamentos das despesas do mês
+ * fora do crédito + pagamentos das faturas que vencem no mês). Sem saldo acumulado.
  */
 export async function monthSummary(db: DB, walletId: string, month: Month, clock: Clock): Promise<Summary> {
   const [expenses, incomes, invoiceRows] = await Promise.all([
@@ -21,18 +27,24 @@ export async function monthSummary(db: DB, walletId: string, month: Month, clock
   ]);
 
   const expense = { paidCents: 0, pendingCents: 0, lateCents: 0 };
+  let cashOut = 0;
   for (const r of expenses) {
-    if (r.method === 'credit') continue; // crédito entra pela fatura
-    if (!r.late) expense.paidCents += r.paidCents;
+    if (r.systemKind === 'invoice_carryover' || r.displayStatus === 'canceled') continue;
+    if (r.method === 'credit' || r.invoice) {
+      const settled = r.invoice && (r.invoice.status === 'paid' || r.invoice.status === 'carried');
+      if (settled) expense.paidCents += r.expectedCents;
+      else expense.pendingCents += r.expectedCents;
+      continue;
+    }
+    if (!r.late) {
+      expense.paidCents += r.paidCents;
+      cashOut += r.paidCents;
+    }
     expense.pendingCents += r.remainingCents;
     if (r.late) expense.lateCents += r.remainingCents;
   }
-  for (const inv of invoiceRows) {
-    const open = inv.status === 'open' ? Math.max(0, inv.totalCents - inv.paidCents) : 0;
-    if (inv.referenceMonth === month) expense.paidCents += inv.paidCents;
-    expense.pendingCents += open;
-    if (inv.late) expense.lateCents += open;
-  }
+  // Caixa: o que saiu da conta para pagar as faturas que vencem no mês.
+  for (const inv of invoiceRows) if (inv.referenceMonth === month) cashOut += inv.paidCents;
 
   const income = { receivedCents: 0, pendingCents: 0, lateCents: 0 };
   for (const r of incomes) {
@@ -41,22 +53,29 @@ export async function monthSummary(db: DB, walletId: string, month: Month, clock
     if (r.late) income.lateCents += r.remainingCents;
   }
 
+  // O previsto do mês: o que já foi realizado mais o que ainda falta.
+  const incomeForecast = income.receivedCents + income.pendingCents;
+  const expenseForecast = expense.paidCents + expense.pendingCents;
   return {
     month,
     isCurrentMonth: month === clock.currentMonth,
-    income,
-    expense,
+    income: { ...income, forecastCents: incomeForecast },
+    expense: { ...expense, forecastCents: expenseForecast },
     balance: {
-      realizedCents: income.receivedCents - expense.paidCents,
-      forecastCents: income.receivedCents + income.pendingCents - (expense.paidCents + expense.pendingCents),
+      realizedCents: income.receivedCents - cashOut,
+      forecastCents: incomeForecast - expenseForecast,
     },
   };
 }
 
-/** Meses navegáveis: do primeiro com dados até 6 meses à frente ou a última parcela, o que for mais longe. */
+/** Meses navegáveis (pelo mês do gasto e pelo da fatura): do primeiro com dados até 6 meses à frente ou a última parcela, o que for mais longe. */
 export async function monthsRange(db: DB, walletId: string, clock: Clock): Promise<MonthsRange> {
   const [r] = await db
-    .select({ first: min(occurrences.competenceMonth), last: max(occurrences.competenceMonth) })
+    // Mês do gasto ou da fatura, o que for mais longe (no crédito, a fatura pode vir até 2 meses depois).
+    .select({
+      first: sql<string | null>`min(least(${occurrences.competenceMonth}, ${occurrences.chargeMonth}))`,
+      last: sql<string | null>`max(greatest(${occurrences.competenceMonth}, ${occurrences.chargeMonth}))`,
+    })
     .from(occurrences)
     .innerJoin(items, eq(items.id, occurrences.itemId))
     .where(and(eq(occurrences.walletId, walletId), isNull(items.deletedAt)));

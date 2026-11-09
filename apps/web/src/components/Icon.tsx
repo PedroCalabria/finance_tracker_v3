@@ -36,6 +36,7 @@ const P = {
   left: <path d="m15 18-6-6 6-6" />,
   right: <path d="m9 18 6-6-6-6" />,
   down: <path d="m6 9 6 6 6-6" />,
+  up: <path d="m18 15-6-6-6 6" />,
   updown: (
     <>
       <path d="m7 15 5 5 5-5" />

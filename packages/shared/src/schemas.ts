@@ -21,6 +21,9 @@ export const resetPasswordInput = z.object({ token: z.string().min(16).max(200),
 export const categoryInput = z.object({ name: z.string().trim().min(1, 'Informe o nome.').max(60), type: z.enum(ITEM_TYPES) });
 export const categoryUpdate = z.object({ name: z.string().trim().min(1).max(60) });
 
+export const personInput = z.object({ name: z.string().trim().min(1, 'Informe o nome.').max(60) });
+export const personUpdate = personInput;
+
 const day = z.number().int().min(1).max(31);
 export const accountInput = z
   .object({
@@ -92,10 +95,24 @@ export const itemCreateInput = z
     startMonth: month.nullish(),
     /** Recorrente: dia do pagamento/recebimento (fora do crédito) ou da cobrança (crédito). */
     day: z.number({ invalid_type_error: 'Dia entre 1 e 31.' }).int('Dia entre 1 e 31.').min(1, 'Dia entre 1 e 31.').max(31, 'Dia entre 1 e 31.').nullish(),
+    /** "Já foi pago?" da única e da recorrente. Ignorado na parcelada (vale `pastInstallmentsPaid`). */
     alreadyPaid: z.boolean().optional(),
+    /** Parcelada: quita as parcelas de meses anteriores ao atual (no crédito, as faturas passadas só desta compra). */
+    pastInstallmentsPaid: z.boolean().optional(),
+    /** Responsável; nulo = "Eu". */
+    personId: uuid.nullish(),
+    /** Despesa de outra pessoa: cria a entrada de reembolso vinculada (ADR-0004). */
+    createReimbursement: z.boolean().optional(),
     note: z.string().trim().max(500).nullish(),
   })
   .superRefine((i, ctx) => checkDates(i, ctx, 'create'))
+  .superRefine((i, ctx) => {
+    if (!i.createReimbursement) return;
+    const issue = (path: string, message: string) => ctx.addIssue({ code: z.ZodIssueCode.custom, path: [path], message });
+    if (i.type !== 'expense') issue('createReimbursement', 'Só despesas geram reembolso.');
+    else if (!i.personId) issue('personId', 'Escolha a pessoa.');
+    else if (i.form === 'recurring' && i.method !== 'credit' && i.day == null) issue('day', 'Informe o dia: o reembolso usa o mesmo dia.');
+  })
   .refine((i) => i.form !== 'installment' || (i.installments ?? 0) >= 2, { message: 'Informe o número de parcelas.', path: ['installments'] })
   .refine((i) => i.method !== 'credit' || i.type === 'expense', { message: 'Crédito só vale para despesas.', path: ['method'] })
   .refine((i) => i.method !== 'credit' || !!i.accountId, { message: 'Escolha o cartão.', path: ['accountId'] });
@@ -141,6 +158,8 @@ export const itemEditInput = z
     /** Recorrente: dia; fora do crédito vale do mês aberto em diante. */
     day: z.number({ invalid_type_error: 'Dia entre 1 e 31.' }).int('Dia entre 1 e 31.').min(1, 'Dia entre 1 e 31.').max(31, 'Dia entre 1 e 31.').nullish(),
     note: z.string().trim().max(500).nullish(),
+    /** Responsável (mudança simples). Ausente = não muda; nulo = "Eu". */
+    personId: uuid.nullish(),
     version: z.number().int().optional(),
   })
   .superRefine((i, ctx) => checkDates(i, ctx, 'edit'))
@@ -197,6 +216,7 @@ export const occurrencesQuery = z.object({
 
 export type RegisterInput = z.infer<typeof registerInput>;
 export type CategoryInput = z.infer<typeof categoryInput>;
+export type PersonInput = z.infer<typeof personInput>;
 export type AccountInput = z.infer<typeof accountInput>;
 export type ItemCreateInput = z.infer<typeof itemCreateInput>;
 export type ItemUpdateInput = z.infer<typeof itemUpdateInput>;

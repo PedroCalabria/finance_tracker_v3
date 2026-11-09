@@ -34,16 +34,17 @@ textarea.ff-input { min-height: 88px; padding-top: var(--space-2); padding-botto
 
 /* ---------- Tabela: ajustes de uso real (ADR-0009)
    Colunas da especificação em telas largas; em notebooks, Método aparece embaixo
-   do Banco e Observação embaixo do Serviço, para nada ficar escondido à direita. */
+   do Banco, Responsável embaixo da Categoria e Observação embaixo do Serviço, para
+   nada ficar escondido à direita. */
 .app-occ-table { container-type: inline-size; }
 .app-occ-table .ff-table th, .app-occ-table .ff-table td { padding-left: var(--space-3); padding-right: var(--space-3); }
 .app-occ-table .app-col-toggle { width: 48px; padding-left: var(--space-2); padding-right: 0; }
 .app-occ-table .app-wrap { white-space: normal; min-width: 90px; }
-.app-method-inline, .app-note-inline { display: none; font-size: 13px; line-height: 18px; font-weight: 500; color: var(--ink-muted); white-space: normal; }
+.app-method-inline, .app-note-inline, .app-person-inline { display: none; font-size: 13px; line-height: 18px; font-weight: 500; color: var(--ink-muted); white-space: normal; }
 .app-note-inline { max-width: 260px; }
 @container (max-width: 1279px) {
-  .app-occ-table .app-col-method, .app-occ-table .app-col-note { display: none; }
-  .app-method-inline, .app-note-inline { display: block; }
+  .app-occ-table .app-col-method, .app-occ-table .app-col-note, .app-occ-table .app-col-person { display: none; }
+  .app-method-inline, .app-note-inline, .app-person-inline { display: block; }
 }
 .ff-table td.is-service { white-space: normal; min-width: 170px; }
 .ff-table td.is-note { max-width: 220px; }
@@ -81,6 +82,15 @@ textarea.ff-input { min-height: 88px; padding-top: var(--space-2); padding-botto
 /* Mês e ano em duas listas (no lugar do input type=month, que falha no Safari) */
 .app-monthpick { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 7.5em); gap: var(--space-2); }
 .app-day { max-width: 8em; }
+/* Número com setas dentro da caixa (StepperInput; não há no design system) */
+.app-stepper { position: relative; display: block; }
+.app-stepper .ff-input { padding-right: 40px; font-variant-numeric: tabular-nums; }
+.app-stepper__arrows { position: absolute; top: 1px; right: 1px; bottom: 1px; width: 32px; display: flex; flex-direction: column; border-left: 1px solid var(--border); border-radius: 0 var(--radius-md) var(--radius-md) 0; overflow: hidden; }
+.app-stepper__arrows button { flex: 1; display: grid; place-items: center; padding: 0; border: 0; background: var(--surface-subtle); color: var(--ink-muted); cursor: pointer; }
+.app-stepper__arrows button + button { border-top: 1px solid var(--border); }
+.app-stepper__arrows button:hover:not(:disabled) { background: var(--border); color: var(--ink); }
+.app-stepper__arrows button:disabled { cursor: default; opacity: .4; }
+.app-stepper__arrows svg { width: 14px; height: 14px; }
 /* Opções com explicação (ex.: alcance da exclusão de uma recorrente) */
 .app-choices { margin: 0; padding: 0; border: 0; min-width: 0; display: flex; flex-direction: column; gap: var(--space-2); }
 .app-choices legend { padding: 0; margin-bottom: var(--space-2); }

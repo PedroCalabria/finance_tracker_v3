@@ -1,5 +1,6 @@
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import {
+  addMonths,
   daysBetween,
   monthOf,
   type ImportConfirmInput,
@@ -177,7 +178,8 @@ async function createFromInvoice(tx: Tx, walletId: string, userId: string, cardI
     },
     userId,
     clock,
-    { invoiceMonth: refMonth },
+    // "PARC n/m": a 1ª parcela importada é a n, gasta n − 1 meses depois da compra original.
+    { invoiceMonth: refMonth, firstChargeMonth: parcel ? addMonths(monthOf(line.date), parcel.n - 1) : undefined },
   );
   return { action: 'created', itemId: detail.id, occurrenceId: detail.occurrences[0]?.id ?? null, month: refMonth };
 }

@@ -174,11 +174,15 @@ describe('cartão e faturas', () => {
   it('itens no crédito não têm botão de pagar e herdam o status da fatura', async () => {
     await create({ description: 'Pizza', method: 'credit', accountId: cards.bb, amountCents: 8000, date: '2026-10-30' });
     await create({ description: 'Seguro do carro', method: 'credit', accountId: cards.bb, form: 'installment', amountCents: 90000, installments: 2, date: '2026-10-15' });
-    const pizza = find(await occ('2026-11'), 'Pizza');
-    expect([pizza.displayStatus, pizza.dueDate, pizza.invoice.referenceMonth]).toEqual(['invoice_open', '2026-11-08', '2026-11']);
+    // Na tabela, a compra fica no mês em que foi feita (out); a fatura é a de nov.
+    const pizza = find(await occ('2026-10'), 'Pizza');
+    expect([pizza.displayStatus, pizza.dueDate, pizza.invoice.referenceMonth, pizza.chargeMonth]).toEqual(['invoice_open', '2026-11-08', '2026-11', '2026-10']);
+    expect(find(await occ('2026-11'), 'Pizza')).toBeUndefined();
     const res = await c.post(c.w(`/occurrences/${pizza.id}/payments`), { paidAt: '2026-11-03', amountCents: 8000 });
     expect(res.json().error.code).toBe('credit_item');
-    expect(find(await occ('2026-12'), 'Seguro do carro').installmentLabel).toBe('2/2');
+    // Parcela 2 gasta em nov (compra de out + 1), na fatura de dez.
+    const second = find(await occ('2026-11'), 'Seguro do carro');
+    expect([second.installmentLabel, second.invoice.referenceMonth]).toEqual(['2/2', '2026-12']);
   });
   it('valor real diferente gera ajuste; pagamento parcial transfere o saldo', async () => {
     const invs = (await c.get(c.w('/invoices?month=2026-11'))).json();
@@ -189,7 +193,7 @@ describe('cartão e faturas', () => {
     expect([paid.status, paid.totalCents, paid.paidCents, paid.carriedToMonth]).toEqual(['carried', 54000, 40000, '2026-12']);
     const nov = await occ('2026-11');
     expect(find(nov, 'Ajuste da fatura').expectedCents).toBe(1000);
-    expect(find(nov, 'Pizza').displayStatus).toBe('invoice_carried');
+    expect(find(await occ('2026-10'), 'Pizza').displayStatus).toBe('invoice_carried');
     const carry = find(await occ('2026-12'), 'Saldo restante da fatura nov/2026 · BB Crédito');
     expect(carry.expectedCents).toBe(14000);
     // fatura encerrada não aceita outro pagamento
@@ -204,14 +208,15 @@ describe('cartão e faturas', () => {
     const bb = (await c.get(c.w('/invoices?month=2026-11'))).json().find((i: any) => i.account.id === cards.bb);
     const paid = (await c.post(c.w(`/invoices/${bb.id}/payments`), { realAmountCents: 54000, amountCents: 54000, paidAt: '2026-11-08' })).json();
     expect(paid.status).toBe('paid');
-    expect(find(await occ('2026-11'), 'Pizza').displayStatus).toBe('invoice_paid');
+    expect(find(await occ('2026-10'), 'Pizza').displayStatus).toBe('invoice_paid');
   });
   it('mover um item para outra fatura', async () => {
     await create({ description: 'Farmácia', method: 'credit', accountId: cards.nu, amountCents: 4590, date: '2026-11-20' });
-    const row = find(await occ('2026-12'), 'Farmácia');
+    const row = find(await occ('2026-11'), 'Farmácia');
     expect(row.invoice.referenceMonth).toBe('2026-12');
     const moved = (await c.patch(c.w(`/occurrences/${row.id}/invoice`), { referenceMonth: '2027-01' })).json();
-    expect([moved.competenceMonth, moved.dueDate]).toEqual(['2027-01', '2027-01-01']);
+    // Mover de fatura não muda o mês do gasto.
+    expect([moved.competenceMonth, moved.dueDate, moved.chargeMonth]).toEqual(['2027-01', '2027-01-01', '2026-11']);
   });
   it('recorrente no crédito entra nas faturas e projeta nos meses futuros', async () => {
     await create({ description: 'Netflix', form: 'recurring', method: 'credit', accountId: cards.nu, amountCents: 5590, startMonth: '2026-11', day: 15 });
@@ -227,8 +232,8 @@ describe('resumo do mês', () => {
     // atrasos: Internet set + out (12000 cada) + Curso? (cancelado, não)
     expect(s.expense.lateCents).toBe(24000);
     expect(s.income.receivedCents).toBe(650000);
-    expect(s.balance.realizedCents).toBe(s.income.receivedCents - s.expense.paidCents);
-    expect(s.balance.forecastCents).toBe(s.income.receivedCents + s.income.pendingCents - s.expense.paidCents - s.expense.pendingCents);
+    expect(s.balance.forecastCents).toBe(s.income.forecastCents - s.expense.forecastCents);
+    expect(s.expense.forecastCents).toBe(s.expense.paidCents + s.expense.pendingCents);
     const future = await summary('2027-01');
     expect(future.expense.lateCents).toBe(0);
     expect(future.expense.pendingCents).toBeGreaterThan(0);

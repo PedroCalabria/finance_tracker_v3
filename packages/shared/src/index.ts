@@ -10,3 +10,5 @@ export * from './schedule';
 export * from './imports';
 export * from './rebuild';
 export * from './reimbursement';
+export * from './debts';
+export * from './investments';

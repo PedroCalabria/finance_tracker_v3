@@ -3,6 +3,8 @@ import { addMonths, type Month, type MonthsRange, type Summary } from '@ff/share
 import type { DB } from '../db/client';
 import { items, occurrences } from '../db/schema';
 import type { Clock } from './clock';
+import { debtExtraForMonth } from './debts';
+import { monthInvestmentTotals } from './investments';
 import { listInvoices } from './invoices';
 import { listOccurrences } from './occurrences';
 
@@ -18,12 +20,16 @@ import { listOccurrences } from './occurrences';
  * Previsto = realizado + o que falta. Balanço previsto = entradas − gastos (consumo).
  * Balanço realizado = CAIXA ("Na conta até agora"): recebido − (pagamentos das despesas do mês
  * fora do crédito + pagamentos das faturas que vencem no mês). Sem saldo acumulado.
+ * O que tem destino (ADR-0012) também entra: o previsto desconta "guardar em caixinhas" e "amortizar
+ * dívidas" (só a extra: as parcelas já estão nos gastos) e soma o resgatado; o caixa usa só o realizado.
  */
 export async function monthSummary(db: DB, walletId: string, month: Month, clock: Clock): Promise<Summary> {
-  const [expenses, incomes, invoiceRows] = await Promise.all([
+  const [expenses, incomes, invoiceRows, inv, debt] = await Promise.all([
     listOccurrences(db, walletId, { month, type: 'expense' }, clock),
     listOccurrences(db, walletId, { month, type: 'income' }, clock),
     listInvoices(db, walletId, month, clock),
+    monthInvestmentTotals(db, walletId, month, clock),
+    debtExtraForMonth(db, walletId, month, clock),
   ]);
 
   const expense = { paidCents: 0, pendingCents: 0, lateCents: 0 };
@@ -56,15 +62,20 @@ export async function monthSummary(db: DB, walletId: string, month: Month, clock
   // O previsto do mês: o que já foi realizado mais o que ainda falta.
   const incomeForecast = income.receivedCents + income.pendingCents;
   const expenseForecast = expense.paidCents + expense.pendingCents;
+  // O que tem destino (ADR-0012): passados = realizado; atual e futuros = max(planejado, realizado).
+  const investmentsForecast = inv.plannedCents === null ? inv.depositedCents : Math.max(inv.plannedCents, inv.depositedCents);
+  const debtExtraForecast = debt.plannedCents === null ? debt.paidCents : Math.max(debt.plannedCents, debt.paidCents);
   return {
     month,
     isCurrentMonth: month === clock.currentMonth,
     income: { ...income, forecastCents: incomeForecast },
     expense: { ...expense, forecastCents: expenseForecast },
     balance: {
-      realizedCents: income.receivedCents - cashOut,
-      forecastCents: incomeForecast - expenseForecast,
+      realizedCents: income.receivedCents - cashOut - inv.depositedCents + inv.withdrawnCents - debt.paidCents,
+      forecastCents: incomeForecast - expenseForecast - investmentsForecast + inv.withdrawnCents - debtExtraForecast,
     },
+    investments: { ...inv, forecastCents: investmentsForecast },
+    debtExtra: { ...debt, forecastCents: debtExtraForecast },
   };
 }
 

@@ -364,3 +364,189 @@ export const importLines = pgTable(
     index('import_lines_occurrence_idx').on(t.occurrenceId),
   ],
 );
+
+/* ---------- Dívidas (ADR-0011): módulo isolado da tabela do mês ---------- */
+
+/**
+ * Dívida da carteira. O contrato (parcela, parcelas restantes, dia) tem a forma dos campos de `items`
+ * para receber depois um `item_id` nulo (vínculo com a tabela do mês). O saldo NÃO vem do ledger:
+ * sai das âncoras e dos pagamentos próprios.
+ */
+export const debts = pgTable(
+  'debts',
+  {
+    id: id(),
+    walletId: uuid('wallet_id').notNull().references(() => wallets.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    category: text('category', {
+      enum: ['card_installment', 'overdraft', 'personal_loan', 'payroll_loan', 'vehicle_financing', 'mortgage', 'person', 'other'],
+    }).notNull(),
+    creditorName: text('creditor_name'),
+    creditorPersonId: uuid('creditor_person_id').references(() => people.id, { onDelete: 'set null' }),
+    structure: text('structure', { enum: ['price', 'sac', 'revolving', 'interest_free'] }).notNull(),
+    /** Taxa mensal composta em milionésimos da fração (2,99% a.m. = 29900). */
+    monthlyRatePpm: integer('monthly_rate_ppm').notNull(),
+    installmentCents: integer('installment_cents'),
+    remainingInstallments: smallint('remaining_installments'),
+    dueDay: smallint('due_day'),
+    minPaymentKind: text('min_payment_kind', { enum: ['fixed', 'percent'] }),
+    /** Centavos (fixed) ou milionésimos do saldo (percent). */
+    minPaymentValue: integer('min_payment_value'),
+    /** Data a que o contrato se refere: parcelas de pagamentos posteriores descontam `remaining_installments`. */
+    contractAsOf: dateCol('contract_as_of').notNull(),
+    acceptsExtra: boolean('accepts_extra').notNull(),
+    status: text('status', { enum: ['active', 'paid_off'] }).notNull().default('active'),
+    paidOffOn: dateCol('paid_off_on'),
+    /** Posição na "Minha ordem". */
+    position: integer('position'),
+    createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+    deletedAt: timestamp('deleted_at', { withTimezone: true }),
+    version: version(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    index('debts_wallet_idx').on(t.walletId).where(sql`${t.deletedAt} is null`),
+    check('debts_creditor_one', sql`${t.creditorName} is null or ${t.creditorPersonId} is null`),
+    check('debts_interest_free_rate', sql`${t.structure} <> 'interest_free' or ${t.monthlyRatePpm} = 0`),
+    check('debts_rate_range', sql`${t.monthlyRatePpm} between 0 and 500000`),
+  ],
+);
+
+/** "Saldo em dd/mm/aaaa" informado pela pessoa. A mais antiga é o saldo inicial; a mais recente, a vigente. */
+export const debtBalanceAnchors = pgTable(
+  'debt_balance_anchors',
+  {
+    id: id(),
+    walletId: uuid('wallet_id').notNull().references(() => wallets.id, { onDelete: 'cascade' }),
+    debtId: uuid('debt_id').notNull().references(() => debts.id, { onDelete: 'cascade' }),
+    date: dateCol('date').notNull(),
+    balanceCents: integer('balance_cents').notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex('debt_anchors_debt_date_uq').on(t.debtId, t.date)],
+);
+
+/** Pagamentos de dívidas, separados de `payments` (pronto para um `occurrence_id` nulo no vínculo futuro). */
+export const debtPayments = pgTable(
+  'debt_payments',
+  {
+    id: id(),
+    walletId: uuid('wallet_id').notNull().references(() => wallets.id, { onDelete: 'cascade' }),
+    debtId: uuid('debt_id').notNull().references(() => debts.id, { onDelete: 'cascade' }),
+    date: dateCol('date').notNull(),
+    amountCents: integer('amount_cents').notNull(),
+    kind: text('kind', { enum: ['installment', 'extra'] }).notNull(),
+    extraEffect: text('extra_effect', { enum: ['reduce_term', 'reduce_installment'] }),
+    paidBy: uuid('paid_by').references(() => users.id, { onDelete: 'set null' }),
+    version: version(),
+    createdAt: createdAt(),
+  },
+  (t) => [index('debt_payments_wallet_date_idx').on(t.walletId, t.date), index('debt_payments_debt_idx').on(t.debtId)],
+);
+
+/** Orçamento mensal para dívidas: "a partir de AAAA-MM: valor" (vale até a próxima vigência). */
+export const debtBudgets = pgTable(
+  'debt_budgets',
+  {
+    walletId: uuid('wallet_id').notNull().references(() => wallets.id, { onDelete: 'cascade' }),
+    fromMonth: monthCol('from_month').notNull(),
+    amountCents: integer('amount_cents').notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.walletId, t.fromMonth] })],
+);
+
+/** Estratégia de prioridade da carteira. */
+export const debtSettings = pgTable('debt_settings', {
+  walletId: uuid('wallet_id')
+    .primaryKey()
+    .references(() => wallets.id, { onDelete: 'cascade' }),
+  strategy: text('strategy', { enum: ['avalanche', 'snowball', 'manual'] }).notNull().default('avalanche'),
+  manualOrderSet: boolean('manual_order_set').notNull().default(false),
+});
+
+/* ---------- Investimentos em caixinhas (ADR-0012). Isolados do ledger: só o resumo do mês os lê. ---------- */
+
+/** Caixinha da carteira. Prefixado em milionésimos ao mês; % do CDI em centésimos de ponto (100% = 10000). */
+export const investments = pgTable(
+  'investments',
+  {
+    id: id(),
+    walletId: uuid('wallet_id').notNull().references(() => wallets.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    icon: text('icon').notNull(),
+    kind: text('kind', { enum: ['savings_box', 'treasury', 'lci_lca', 'poupanca', 'other'] }).notNull(),
+    yieldKind: text('yield_kind', { enum: ['fixed', 'cdi', 'none'] }).notNull(),
+    fixedRatePpm: integer('fixed_rate_ppm'),
+    cdiShareBp: integer('cdi_share_bp'),
+    /** "Só a partir de": nulo = a qualquer momento. */
+    redeemableFrom: dateCol('redeemable_from'),
+    taxMode: text('tax_mode', { enum: ['regressive', 'exempt'] }).notNull(),
+    goalCents: integer('goal_cents'),
+    goalMonth: monthCol('goal_month'),
+    /** "Guardar por mês" (vale o valor atual; meses passados usam o realizado). */
+    monthlyPlanCents: integer('monthly_plan_cents'),
+    status: text('status', { enum: ['active', 'closed'] }).notNull().default('active'),
+    closedOn: dateCol('closed_on'),
+    createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+    deletedAt: timestamp('deleted_at', { withTimezone: true }),
+    version: version(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    index('investments_wallet_idx').on(t.walletId).where(sql`${t.deletedAt} is null`),
+    check('investments_fixed_rate', sql`(${t.yieldKind} = 'fixed') = (${t.fixedRatePpm} is not null) and coalesce(${t.fixedRatePpm}, 0) between 0 and 100000`),
+    check('investments_cdi_share', sql`(${t.yieldKind} = 'cdi') = (${t.cdiShareBp} is not null) and coalesce(${t.cdiShareBp}, 1) between 1 and 30000`),
+    check('investments_goal', sql`${t.goalMonth} is null or ${t.goalCents} is not null`),
+    check('investments_goal_positive', sql`${t.goalCents} is null or ${t.goalCents} > 0`),
+    check('investments_plan_positive', sql`${t.monthlyPlanCents} is null or ${t.monthlyPlanCents} > 0`),
+  ],
+);
+
+/** Valor inicial, aportes e resgates. O inicial conta no rendimento e no imposto, não no resumo do mês. */
+export const investmentMovements = pgTable(
+  'investment_movements',
+  {
+    id: id(),
+    walletId: uuid('wallet_id').notNull().references(() => wallets.id, { onDelete: 'cascade' }),
+    investmentId: uuid('investment_id').notNull().references(() => investments.id, { onDelete: 'cascade' }),
+    date: dateCol('date').notNull(),
+    kind: text('kind', { enum: ['initial', 'deposit', 'withdrawal'] }).notNull(),
+    /** Aporte: o que entrou; resgate: o que saiu da caixinha (bruto). */
+    amountCents: integer('amount_cents').notNull(),
+    /** Só no resgate: impostos retidos (IR + IOF). */
+    taxCents: integer('tax_cents'),
+    createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+    version: version(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex('investment_movements_initial_uq').on(t.investmentId).where(sql`${t.kind} = 'initial'`),
+    index('investment_movements_wallet_date_idx').on(t.walletId, t.date),
+    index('investment_movements_investment_idx').on(t.investmentId),
+    check('investment_movements_amount', sql`${t.amountCents} > 0`),
+    check('investment_movements_tax', sql`(${t.kind} = 'withdrawal' or ${t.taxCents} is null) and coalesce(${t.taxCents}, 0) between 0 and ${t.amountCents}`),
+  ],
+);
+
+/** "Saldo em dd/mm/aaaa" da caixinha: alinha a estimativa ao banco. */
+export const investmentBalanceAnchors = pgTable(
+  'investment_balance_anchors',
+  {
+    id: id(),
+    walletId: uuid('wallet_id').notNull().references(() => wallets.id, { onDelete: 'cascade' }),
+    investmentId: uuid('investment_id').notNull().references(() => investments.id, { onDelete: 'cascade' }),
+    date: dateCol('date').notNull(),
+    balanceCents: integer('balance_cents').notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex('investment_anchors_date_uq').on(t.investmentId, t.date), check('investment_anchors_balance', sql`${t.balanceCents} >= 0`)],
+);
+
+/** CDI anual estimado da carteira, em milionésimos (14,90% a.a. = 149000). */
+export const investmentSettings = pgTable('investment_settings', {
+  walletId: uuid('wallet_id')
+    .primaryKey()
+    .references(() => wallets.id, { onDelete: 'cascade' }),
+  cdiAnnualPpm: integer('cdi_annual_ppm'),
+  cdiUpdatedOn: dateCol('cdi_updated_on'),
+});

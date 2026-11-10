@@ -2,6 +2,14 @@ import { QueryClient, useMutation, useQuery, useQueryClient } from '@tanstack/re
 import type {
   Account,
   Category,
+  DebtBudgetRow,
+  DebtDetail,
+  DebtPlan,
+  DebtRow,
+  InvestmentDetail,
+  InvestmentOverview,
+  InvestmentRow,
+  InvestmentSettings,
   InvoicePreview,
   InvoiceRow,
   ItemDetail,
@@ -90,3 +98,32 @@ export function useFinanceMutation<TVars, TRes = unknown>(w: string, fn: (vars: 
 }
 
 export const walletUrl = W;
+
+// ---------- Dívidas (ADR-0011): módulo isolado; não mexe nas chaves do mês.
+export const useDebts = (w: string) => useQuery({ queryKey: ['debts', w], queryFn: () => api.get<DebtRow[]>(`${W(w)}/debts`), enabled: !!w });
+export const useDebt = (w: string, id: string | null) =>
+  useQuery({ queryKey: ['debts', w, id], queryFn: () => api.get<DebtDetail>(`${W(w)}/debts/${id}`), enabled: !!w && !!id });
+export const useDebtPlan = (w: string) => useQuery({ queryKey: ['debt-plan', w], queryFn: () => api.get<DebtPlan>(`${W(w)}/debt-plan`), enabled: !!w });
+export const useDebtBudgets = (w: string) =>
+  useQuery({ queryKey: ['debt-budgets', w], queryFn: () => api.get<DebtBudgetRow[]>(`${W(w)}/debt-budgets`), enabled: !!w });
+
+/** Depois de qualquer mudança no módulo de dívidas: lista, detalhe, plano e orçamento recarregam. */
+export function invalidateDebts(w: string) {
+  // A amortização extra entra no balanço do mês (ADR-0012): o resumo recarrega junto.
+  for (const k of ['debts', 'debt-plan', 'debt-budgets', 'summary']) void queryClient.invalidateQueries({ queryKey: [k, w] });
+}
+
+// ---------- Investimentos em caixinhas (ADR-0012): módulo isolado; só o resumo do mês o lê.
+export const useInvestments = (w: string) =>
+  useQuery({ queryKey: ['investments', w], queryFn: () => api.get<InvestmentRow[]>(`${W(w)}/investments`), enabled: !!w });
+export const useInvestment = (w: string, id: string | null) =>
+  useQuery({ queryKey: ['investments', w, id], queryFn: () => api.get<InvestmentDetail>(`${W(w)}/investments/${id}`), enabled: !!w && !!id });
+export const useInvestmentOverview = (w: string) =>
+  useQuery({ queryKey: ['investment-overview', w], queryFn: () => api.get<InvestmentOverview>(`${W(w)}/investments/overview`), enabled: !!w });
+export const useInvestmentSettings = (w: string) =>
+  useQuery({ queryKey: ['investment-settings', w], queryFn: () => api.get<InvestmentSettings>(`${W(w)}/investment-settings`), enabled: !!w });
+
+/** Depois de qualquer mudança nas caixinhas: lista, detalhe, visão geral, CDI e o resumo do mês recarregam. */
+export function invalidateInvestments(w: string) {
+  for (const k of ['investments', 'investment-overview', 'investment-settings', 'summary']) void queryClient.invalidateQueries({ queryKey: [k, w] });
+}

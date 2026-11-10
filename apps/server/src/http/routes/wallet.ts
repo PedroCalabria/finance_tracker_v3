@@ -5,8 +5,24 @@ import {
   accountUpdate,
   categoryInput,
   categoryUpdate,
+  debtAnchorInput,
+  debtBudgetInput,
+  debtCreateInput,
+  debtOrderInput,
+  debtPaymentInput,
+  debtPaymentUpdateInput,
+  debtPayOffInput,
+  debtSettingsInput,
+  debtUpdateInput,
   importConfirmInput,
   importSuggestInput,
+  investmentAnchorInput,
+  investmentCloseInput,
+  investmentCreateInput,
+  investmentMovementInput,
+  investmentMovementUpdateInput,
+  investmentSettingsInput,
+  investmentUpdateInput,
   invoicePaymentInput,
   invoiceUpdateInput,
   isoDate,
@@ -29,10 +45,12 @@ import { users } from '../../db/schema';
 import * as attachmentsSvc from '../../domain/attachments';
 import * as catalog from '../../domain/catalog';
 import { clockAt, type Clock } from '../../domain/clock';
+import * as debtsSvc from '../../domain/debts';
 import * as invoicesSvc from '../../domain/invoices';
 import * as itemsSvc from '../../domain/items';
 import * as importConfirmSvc from '../../domain/imports/confirm';
 import * as importSuggestSvc from '../../domain/imports/suggest';
+import * as investmentsSvc from '../../domain/investments';
 import { MAX_IMPORT_BYTES } from '../../imports/read-file';
 import * as occSvc from '../../domain/occurrences';
 import * as paymentsSvc from '../../domain/payments';
@@ -173,6 +191,88 @@ export async function walletRoutes(app: FastifyInstance, ctx: AppContext): Promi
       return importSuggestSvc.suggestImport(ctx, req.walletId, req.userId, token, accountId, await clock(req));
     });
     r.post<P>(`${W}/imports/confirm`, async (req) => importConfirmSvc.confirmImport(ctx, req.walletId, req.userId, parse(importConfirmInput, req.body), await clock(req)));
+
+    // ---- Dívidas (ADR-0011): módulo isolado da tabela do mês
+    r.get<P>(`${W}/debts`, async (req) => debtsSvc.listDebts(ctx.db, req.walletId, await clock(req)));
+    r.post<P>(`${W}/debts`, async (req, reply) =>
+      reply.status(201).send(await debtsSvc.createDebt(ctx.db, req.walletId, parse(debtCreateInput, req.body), req.userId, await clock(req))),
+    );
+    // Antes de /debts/:id para não ser lida como id.
+    r.put<P>(`${W}/debts/order`, async (req) => debtsSvc.setOrder(ctx.db, req.walletId, parse(debtOrderInput, req.body).ids));
+    r.get<P<'id'>>(`${W}/debts/:id`, async (req) => debtsSvc.getDebt(ctx.db, req.walletId, req.params.id, await clock(req)));
+    r.put<P<'id'>>(`${W}/debts/:id`, async (req) => debtsSvc.updateDebt(ctx.db, req.walletId, req.params.id, parse(debtUpdateInput, req.body), await clock(req)));
+    r.delete<P<'id'>>(`${W}/debts/:id`, async (req, reply) => {
+      await debtsSvc.deleteDebt(ctx.db, req.walletId, req.params.id);
+      return reply.status(204).send();
+    });
+    r.post<P<'id'>>(`${W}/debts/:id/anchors`, async (req, reply) =>
+      reply.status(201).send(await debtsSvc.addAnchor(ctx.db, req.walletId, req.params.id, parse(debtAnchorInput, req.body), await clock(req))),
+    );
+    r.delete<P<'id' | 'anchorId'>>(`${W}/debts/:id/anchors/:anchorId`, async (req) =>
+      debtsSvc.deleteAnchor(ctx.db, req.walletId, req.params.id, req.params.anchorId, await clock(req)),
+    );
+    r.post<P<'id'>>(`${W}/debts/:id/payments`, async (req, reply) =>
+      reply.status(201).send(await debtsSvc.addPayment(ctx.db, req.walletId, req.params.id, parse(debtPaymentInput, req.body), req.userId, await clock(req))),
+    );
+    r.put<P<'id' | 'paymentId'>>(`${W}/debts/:id/payments/:paymentId`, async (req) =>
+      debtsSvc.updatePayment(ctx.db, req.walletId, req.params.id, req.params.paymentId, parse(debtPaymentUpdateInput, req.body), await clock(req)),
+    );
+    r.delete<P<'id' | 'paymentId'>>(`${W}/debts/:id/payments/:paymentId`, async (req) =>
+      debtsSvc.deletePayment(ctx.db, req.walletId, req.params.id, req.params.paymentId, await clock(req)),
+    );
+    r.post<P<'id'>>(`${W}/debts/:id/pay-off`, async (req) =>
+      debtsSvc.payOff(ctx.db, req.walletId, req.params.id, parse(debtPayOffInput, req.body), req.userId, await clock(req)),
+    );
+    r.post<P<'id'>>(`${W}/debts/:id/reopen`, async (req) => debtsSvc.reopen(ctx.db, req.walletId, req.params.id, await clock(req)));
+    r.get<P>(`${W}/debt-settings`, async (req) => debtsSvc.getSettings(ctx.db, req.walletId));
+    r.put<P>(`${W}/debt-settings`, async (req) => debtsSvc.setSettings(ctx.db, req.walletId, parse(debtSettingsInput, req.body).strategy, await clock(req)));
+    r.get<P>(`${W}/debt-budgets`, async (req) => debtsSvc.listBudgets(ctx.db, req.walletId));
+    r.put<P<'month'>>(`${W}/debt-budgets/:month`, async (req) =>
+      debtsSvc.putBudget(ctx.db, req.walletId, parse(month, req.params.month), parse(debtBudgetInput, req.body).amountCents),
+    );
+    r.delete<P<'month'>>(`${W}/debt-budgets/:month`, async (req) => debtsSvc.deleteBudget(ctx.db, req.walletId, parse(month, req.params.month)));
+    r.get<P>(`${W}/debt-plan`, async (req) => debtsSvc.getPlan(ctx.db, req.walletId, await clock(req)));
+
+    // ---- Investimentos em caixinhas (ADR-0012): módulo isolado; só o resumo do mês o lê
+    r.get<P>(`${W}/investment-settings`, async (req) => investmentsSvc.getSettings(ctx.db, req.walletId));
+    r.put<P>(`${W}/investment-settings`, async (req) =>
+      investmentsSvc.putSettings(ctx.db, req.walletId, parse(investmentSettingsInput, req.body).cdiAnnualPpm, await clock(req)),
+    );
+    r.get<P>(`${W}/investments`, async (req) => investmentsSvc.listInvestments(ctx.db, req.walletId, await clock(req)));
+    r.post<P>(`${W}/investments`, async (req, reply) =>
+      reply.status(201).send(await investmentsSvc.createInvestment(ctx.db, req.walletId, parse(investmentCreateInput, req.body), req.userId, await clock(req))),
+    );
+    // Antes de /investments/:id para não ser lida como id.
+    r.get<P>(`${W}/investments/overview`, async (req) => investmentsSvc.getOverview(ctx.db, req.walletId, await clock(req)));
+    r.get<P<'id'>>(`${W}/investments/:id`, async (req) => investmentsSvc.getInvestment(ctx.db, req.walletId, req.params.id, await clock(req)));
+    r.put<P<'id'>>(`${W}/investments/:id`, async (req) =>
+      investmentsSvc.updateInvestment(ctx.db, req.walletId, req.params.id, parse(investmentUpdateInput, req.body), await clock(req)),
+    );
+    r.delete<P<'id'>>(`${W}/investments/:id`, async (req, reply) => {
+      await investmentsSvc.deleteInvestment(ctx.db, req.walletId, req.params.id);
+      return reply.status(204).send();
+    });
+    r.post<P<'id'>>(`${W}/investments/:id/close`, async (req) =>
+      investmentsSvc.closeInvestment(ctx.db, req.walletId, req.params.id, parse(investmentCloseInput, req.body), req.userId, await clock(req)),
+    );
+    r.post<P<'id'>>(`${W}/investments/:id/reopen`, async (req) => investmentsSvc.reopenInvestment(ctx.db, req.walletId, req.params.id, await clock(req)));
+    r.post<P<'id'>>(`${W}/investments/:id/movements`, async (req, reply) =>
+      reply
+        .status(201)
+        .send(await investmentsSvc.addMovement(ctx.db, req.walletId, req.params.id, parse(investmentMovementInput, req.body), req.userId, await clock(req))),
+    );
+    r.put<P<'id' | 'movementId'>>(`${W}/investments/:id/movements/:movementId`, async (req) =>
+      investmentsSvc.updateMovement(ctx.db, req.walletId, req.params.id, req.params.movementId, parse(investmentMovementUpdateInput, req.body), await clock(req)),
+    );
+    r.delete<P<'id' | 'movementId'>>(`${W}/investments/:id/movements/:movementId`, async (req) =>
+      investmentsSvc.deleteMovement(ctx.db, req.walletId, req.params.id, req.params.movementId, await clock(req)),
+    );
+    r.post<P<'id'>>(`${W}/investments/:id/anchors`, async (req, reply) =>
+      reply.status(201).send(await investmentsSvc.addAnchor(ctx.db, req.walletId, req.params.id, parse(investmentAnchorInput, req.body), await clock(req))),
+    );
+    r.delete<P<'id' | 'anchorId'>>(`${W}/investments/:id/anchors/:anchorId`, async (req) =>
+      investmentsSvc.deleteAnchor(ctx.db, req.walletId, req.params.id, req.params.anchorId, await clock(req)),
+    );
 
     // ---- Comprovantes
     const uploadOne = async (req: FastifyRequest) => {

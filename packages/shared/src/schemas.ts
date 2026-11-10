@@ -1,6 +1,10 @@
 import { z } from 'zod';
 import { isISODate, isMonth } from './dates';
 import { ACCOUNT_KINDS, ITEM_FORMS, ITEM_TYPES, METHODS } from './domain';
+import { MAX_DEBT_INSTALLMENTS } from './debts/contract';
+import { MAX_MONTHLY_RATE_PPM } from './debts/rates';
+import { DEBT_CATEGORIES, DEBT_STRATEGIES, DEBT_STRUCTURES } from './debts/types';
+import { INVESTMENT_ICONS, INVESTMENT_KINDS, MAX_CDI_ANNUAL_PPM, MAX_CDI_SHARE_BP, MAX_FIXED_RATE_PPM, TAX_MODES, YIELD_KINDS } from './investments/types';
 
 /** Contratos de entrada da API, validados nos dois lados (ADR-0002). */
 
@@ -225,3 +229,173 @@ export type OccurrenceUpdateInput = z.infer<typeof occurrenceUpdateInput>;
 export type PaymentInput = z.infer<typeof paymentInput>;
 export type InvoicePaymentInput = z.infer<typeof invoicePaymentInput>;
 export type NotificationSettingsInput = z.infer<typeof notificationSettingsInput>;
+
+/* ---------- Dívidas (ADR-0011) ---------- */
+
+const ratePpm = z
+  .number({ invalid_type_error: 'Informe a taxa.' })
+  .int()
+  .min(0, 'A taxa não pode ser negativa.')
+  .max(MAX_MONTHLY_RATE_PPM, 'A taxa passa do limite de 50% ao mês.');
+const installmentsCount = z
+  .number({ invalid_type_error: 'Informe as parcelas restantes.' })
+  .int()
+  .min(1, 'De 1 a 600 parcelas.')
+  .max(MAX_DEBT_INSTALLMENTS, 'De 1 a 600 parcelas.');
+const dueDay = z.number({ invalid_type_error: 'Dia entre 1 e 31.' }).int('Dia entre 1 e 31.').min(1, 'Dia entre 1 e 31.').max(31, 'Dia entre 1 e 31.');
+
+const debtFields = z.object({
+  name: z.string().trim().min(1, 'Informe o nome.').max(60, 'Até 60 caracteres.'),
+  category: z.enum(DEBT_CATEGORIES),
+  creditorName: z.string().trim().max(60, 'Até 60 caracteres.').nullish(),
+  creditorPersonId: uuid.nullish(),
+  structure: z.enum(DEBT_STRUCTURES),
+  monthlyRatePpm: ratePpm,
+  installmentCents: positiveCents.nullish(),
+  remainingInstallments: installmentsCount.nullish(),
+  dueDay: dueDay.nullish(),
+  minPaymentKind: z.enum(['fixed', 'percent']).nullish(),
+  /** Centavos (fixed) ou milionésimos do saldo (percent: 100 = 0,01% a 1.000.000 = 100%). */
+  minPaymentValue: z.number().int().positive('Informe o pagamento mínimo.').nullish(),
+  acceptsExtra: z.boolean(),
+});
+type DebtFieldsShape = z.infer<typeof debtFields>;
+
+/** Campos exigidos por estrutura e credor (ADR-0011). Campos de outra estrutura são ignorados (gravados nulos). */
+function checkDebt(d: DebtFieldsShape, ctx: z.RefinementCtx): void {
+  const issue = (path: string, message: string) => ctx.addIssue({ code: z.ZodIssueCode.custom, path: [path], message });
+  if (d.creditorName && d.creditorPersonId) issue('creditorName', 'Escolha um credor: o nome ou uma pessoa cadastrada.');
+  if (d.category === 'person' && !d.creditorPersonId) issue('creditorPersonId', 'Escolha a pessoa.');
+  if (d.structure === 'interest_free' && d.monthlyRatePpm !== 0) issue('monthlyRatePpm', 'Dívida sem juros tem taxa zero.');
+  if (d.structure === 'price' && d.installmentCents == null) issue('installmentCents', 'Informe a parcela.');
+  if ((d.structure === 'price' || d.structure === 'sac') && d.remainingInstallments == null) issue('remainingInstallments', 'Informe as parcelas restantes.');
+  if ((d.structure === 'price' || d.structure === 'sac') && d.dueDay == null) issue('dueDay', 'Informe o dia de vencimento.');
+  if (d.structure === 'revolving') {
+    if (!d.minPaymentKind) issue('minPaymentKind', 'Informe o pagamento mínimo.');
+    else if (d.minPaymentValue == null) issue('minPaymentValue', 'Informe o pagamento mínimo.');
+    else if (d.minPaymentKind === 'percent' && (d.minPaymentValue < 100 || d.minPaymentValue > 1_000_000)) {
+      issue('minPaymentValue', 'O mínimo vai de 0,01% a 100% do saldo.');
+    }
+  }
+}
+
+export const debtCreateInput = debtFields
+  .extend({
+    /** Primeira âncora: "saldo em dd/mm/aaaa". */
+    anchorDate: isoDate,
+    anchorBalanceCents: cents.min(0, 'O saldo não pode ser negativo.'),
+  })
+  .superRefine(checkDebt);
+
+export const debtUpdateInput = debtFields.extend({ version: z.number().int() }).superRefine(checkDebt);
+
+export const debtAnchorInput = z.object({
+  date: isoDate,
+  balanceCents: cents.min(0, 'O saldo não pode ser negativo.'),
+  /** Price/SAC: contrato informado junto com o saldo (opcional). */
+  remainingInstallments: installmentsCount.nullish(),
+  installmentCents: positiveCents.nullish(),
+});
+
+export const debtPaymentInput = z.object({
+  date: isoDate,
+  amountCents: positiveCents,
+  kind: z.enum(['installment', 'extra']),
+  /** Amortização extra em Price/SAC. */
+  extraEffect: z.enum(['reduce_term', 'reduce_installment']).nullish(),
+  /** Contrato recalculado e confirmado pela pessoa (amortização extra em Price/SAC). */
+  contract: z
+    .object({ installmentCents: positiveCents.nullish(), remainingInstallments: z.number().int().min(0).max(MAX_DEBT_INSTALLMENTS).nullish() })
+    .nullish(),
+});
+export const debtPaymentUpdateInput = z.object({
+  date: isoDate,
+  amountCents: positiveCents,
+  kind: z.enum(['installment', 'extra']),
+  version: z.number().int(),
+});
+
+export const debtPayOffInput = z.object({ date: isoDate, finalPayment: z.boolean().optional() });
+export const debtOrderInput = z.object({ ids: z.array(uuid).min(1).max(500) });
+export const debtSettingsInput = z.object({ strategy: z.enum(DEBT_STRATEGIES) });
+export const debtBudgetInput = z.object({ amountCents: cents.min(0, 'O orçamento não pode ser negativo.') });
+
+export type DebtCreateInput = z.infer<typeof debtCreateInput>;
+export type DebtUpdateInput = z.infer<typeof debtUpdateInput>;
+export type DebtAnchorInput = z.infer<typeof debtAnchorInput>;
+export type DebtPaymentInput = z.infer<typeof debtPaymentInput>;
+export type DebtPaymentUpdateInput = z.infer<typeof debtPaymentUpdateInput>;
+
+/* ---------- Investimentos em caixinhas (ADR-0012) ---------- */
+
+const investmentFields = z.object({
+  name: z.string().trim().min(1, 'Informe o nome.').max(60, 'Até 60 caracteres.'),
+  icon: z.enum(INVESTMENT_ICONS, { errorMap: () => ({ message: 'Escolha um dos ícones da lista.' }) }),
+  kind: z.enum(INVESTMENT_KINDS),
+  yieldKind: z.enum(YIELD_KINDS),
+  /** Prefixado: taxa mensal em milionésimos (1% a.m. = 10000). */
+  fixedRatePpm: z.number().int().min(0, 'A taxa não pode ser negativa.').max(MAX_FIXED_RATE_PPM, 'A taxa vai até 10% a.m.').nullish(),
+  /** % do CDI em centésimos de ponto (100% = 10000). */
+  cdiShareBp: z.number().int().min(1, 'Informe o % do CDI.').max(MAX_CDI_SHARE_BP, 'O % do CDI vai até 300%.').nullish(),
+  redeemableFrom: isoDate.nullish(),
+  taxMode: z.enum(TAX_MODES),
+  goalCents: positiveCents.nullish(),
+  goalMonth: month.nullish(),
+  monthlyPlanCents: positiveCents.nullish(),
+});
+type InvestmentFieldsShape = z.infer<typeof investmentFields>;
+
+function checkInvestment(d: InvestmentFieldsShape, ctx: z.RefinementCtx): void {
+  const issue = (path: string, message: string) => ctx.addIssue({ code: z.ZodIssueCode.custom, path: [path], message });
+  if (d.yieldKind === 'fixed' && d.fixedRatePpm == null) issue('fixedRatePpm', 'Informe a taxa.');
+  if (d.yieldKind === 'cdi' && d.cdiShareBp == null) issue('cdiShareBp', 'Informe o % do CDI.');
+  if (d.goalMonth && d.goalCents == null) issue('goalCents', 'Informe o valor da meta para escolher o mês.');
+}
+
+export const investmentCreateInput = investmentFields
+  .extend({
+    /** "Quanto você já tem guardado aqui?" e "Desde quando?" (movimentação inicial). */
+    initialCents: positiveCents,
+    initialDate: isoDate,
+  })
+  .superRefine(checkInvestment);
+
+export const investmentUpdateInput = investmentFields.extend({ version: z.number().int() }).superRefine(checkInvestment);
+
+const taxCents = cents.min(0, 'O imposto não pode ser negativo.');
+const taxNotAboveAmount = (m: { amountCents: number; taxCents?: number | null }) => m.taxCents == null || m.taxCents <= m.amountCents;
+const taxAboveMessage = { message: 'O imposto não pode ser maior que o resgate.', path: ['taxCents'] };
+
+export const investmentMovementInput = z
+  .object({
+    date: isoDate,
+    kind: z.enum(['deposit', 'withdrawal']),
+    amountCents: positiveCents,
+    /** Só no resgate: impostos retidos (IR + IOF). */
+    taxCents: taxCents.nullish(),
+  })
+  .refine((m) => m.kind === 'withdrawal' || m.taxCents == null, { message: 'Aporte não tem imposto.', path: ['taxCents'] })
+  .refine(taxNotAboveAmount, taxAboveMessage);
+
+export const investmentMovementUpdateInput = z
+  .object({ date: isoDate, amountCents: positiveCents, taxCents: taxCents.nullish(), version: z.number().int() })
+  .refine(taxNotAboveAmount, taxAboveMessage);
+
+export const investmentAnchorInput = z.object({ date: isoDate, balanceCents: cents.min(0, 'O saldo não pode ser negativo.') });
+
+/** Encerrar: resgata o saldo estimado na data (ou os valores confirmados no modal). */
+export const investmentCloseInput = z
+  .object({ date: isoDate, amountCents: cents.min(0).nullish(), taxCents: taxCents.nullish() })
+  .refine((m) => m.amountCents == null || m.taxCents == null || m.taxCents <= m.amountCents, taxAboveMessage);
+
+export const investmentSettingsInput = z.object({
+  /** CDI anual em milionésimos (14,90% a.a. = 149000). */
+  cdiAnnualPpm: z.number().int().min(1, 'Informe o CDI.').max(MAX_CDI_ANNUAL_PPM, 'O CDI vai até 100% a.a.'),
+});
+
+export type InvestmentCreateInput = z.infer<typeof investmentCreateInput>;
+export type InvestmentUpdateInput = z.infer<typeof investmentUpdateInput>;
+export type InvestmentMovementInput = z.infer<typeof investmentMovementInput>;
+export type InvestmentMovementUpdateInput = z.infer<typeof investmentMovementUpdateInput>;
+export type InvestmentAnchorInput = z.infer<typeof investmentAnchorInput>;
+export type InvestmentCloseInput = z.infer<typeof investmentCloseInput>;

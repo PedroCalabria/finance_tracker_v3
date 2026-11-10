@@ -29,6 +29,20 @@
       "when": 1794197273102,
       "tag": "0003_mes_do_gasto",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1794277613619,
+      "tag": "0004_dividas",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1794334619905,
+      "tag": "0005_caixinhas",
+      "breakpoints": true
     }
   ]
 }

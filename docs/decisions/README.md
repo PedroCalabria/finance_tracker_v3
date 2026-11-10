@@ -16,5 +16,7 @@ Ao mudar uma regra, atualize o ADR correspondente (ou crie um novo que o substit
 | [0008](0008-infraestrutura-e-operacao.md) | Uma imagem Docker, Compose na VPS, backup cifrado com retenção | 8 |
 | [0009](0009-interface.md) | Design system no código, tabela responsiva, cache de dados, tema | 3, 6 |
 | [0010](0010-importacao.md) | Importação de extrato e fatura (PDF do BB e OFX), leitura local, prévia assinada, conciliação, impressão digital | fase 2 |
+| [0011](0011-dividas.md) | Dívidas: módulo isolado, saldo por âncora, taxa em milionésimos, simulação mês a mês, avalanche/bola de neve/minha ordem | fase 2 |
+| [0012](0012-investimentos.md) | Investimentos em caixinhas: módulo isolado, CDI da carteira, lotes por aporte, IR/IOF regressivos, projeção; balanço do mês desconta o que tem destino | fase 2 |
 
 O estado de cada etapa e as pendências estão em [`../PROGRESS.md`](../PROGRESS.md).

@@ -18,9 +18,11 @@ Atualizado em 09/11/2026. Fase 1 da especificação implementada; o que falta pa
 | Etapa | Estado | Onde |
 | --- | --- | --- |
 | Importação de extrato e fatura com conciliação: extrato e fatura Ourocard do BB em PDF, OFX de conta | Pronta | `packages/shared/src/imports/`, `apps/server/src/{imports,domain/imports}/`, `pages/ImportPage`, ADR-0010 |
+| Gestão de dívidas: cadastro, saldo por âncora, pagamentos e amortização, orçamento, estratégias e plano de quitação | Pronta | `packages/shared/src/debts/`, `domain/debts.ts`, `pages/DebtsPage`, `debts/`, ADR-0011 |
+| Investimentos em caixinhas: cadastro, CDI, aportes e resgates, IR/IOF, projeção e meta; balanço do mês com o que tem destino | Pronta | `packages/shared/src/investments/`, `domain/investments.ts`, `pages/InvestmentsPage`, `investments/`, ADR-0012 |
 
 ## Verificação
-- 85 testes unitários (`packages/shared`) + 143 de integração (`apps/server/test`): mês do gasto (inclusive o backfill da migração), pessoas e reembolso de gasto de terceiros, parcelas de meses anteriores (inclusive faturas passadas), migrações simultâneas (API e worker), leitores de importação (fixtures anonimizadas), autenticação (inclusive renovação sem o cookie de acesso e corrida entre abas), cadastros, edição de lançamentos (inclusive estrutural com meses pagos), parcelas, recorrentes e projeções, exclusão de recorrente por alcance, importação e conciliação (extrato, fatura, senha, reimportação), pagamentos, faturas, resumo, concorrência, comprovantes (EXIF, cifragem, tipos), avisos (horário, fuso, dia útil, feriado, idempotência).
+- 159 testes unitários (`packages/shared`) + 171 de integração (`apps/server/test`): caixinhas (taxa efetiva e CDI, caminhada com lotes e âncoras, IR/IOF por lote, resgate parcial, projeção e plano mínimo, cadastro, recusas, encerrar e reabrir, resumo do mês com caixinhas e amortização extra), dívidas (taxas, Price/SAC, saldo estimado, amortização, ordem, simulação, comparação, "e se", cadastro, âncoras, pagamentos, quitação, orçamento, estratégia), mês do gasto (inclusive o backfill da migração), pessoas e reembolso de gasto de terceiros, parcelas de meses anteriores (inclusive faturas passadas), migrações simultâneas (API e worker), leitores de importação (fixtures anonimizadas), autenticação (inclusive renovação sem o cookie de acesso e corrida entre abas), cadastros, edição de lançamentos (inclusive estrutural com meses pagos), parcelas, recorrentes e projeções, exclusão de recorrente por alcance, importação e conciliação (extrato, fatura, senha, reimportação), pagamentos, faturas, resumo, concorrência, comprovantes (EXIF, cifragem, tipos), avisos (horário, fuso, dia útil, feriado, idempotência).
 - Roteiro completo no navegador em 1440px, 1920px, 900px e celular, claro e escuro.
 - Passos do Dockerfile reproduzidos numa cópia limpa (o ambiente de desenvolvimento não tinha Docker).
 
@@ -64,3 +66,46 @@ Atualizado em 09/11/2026. Fase 1 da especificação implementada; o que falta pa
 - **Carteira familiar:** criar `POST /wallets`, convites (`/wallets/:id/invites`, `/invites/:token/accept`) e um seletor de carteira na interface; as rotas financeiras já são por carteira. O resumo diário já percorre todas as carteiras da pessoa.
 - **Importação (ADR-0010):** banco novo = leitor novo em `packages/shared/src/imports/readers/` + entrada em `READERS` + fixture anonimizada (`npx tsx scripts/anonymize-import-fixture.ts <pdf> <saida.json>`, que só sabe anonimizar BB; para outro banco, adaptar). PDFs reais ficam em `docs/bank-docs-examples/` (fora do git e da imagem). Pendente: CSV, outros bancos, OFX de cartão, desfazer um lote, tela de histórico das importações e mostrar a numeração original das parcelas importadas.
 - **Telas não feitas por não estarem no escopo:** troca de email/senha logada, exclusão de conta.
+
+## Gestão de dívidas (09/11/2026)
+- **Tela "Dívidas"** (`/dividas`, no menu principal), isolada da tabela do mês (ADR-0011):
+  - cadastro por categoria e estrutura (Price, SAC, Rotativo, Sem juros);
+  - taxa ao mês ou ao ano (guardada em milionésimos);
+  - saldo informado com data (âncora, com histórico) e saldo estimado mês a mês;
+  - pagamentos de parcela e amortização extra (reduzir prazo ou parcela, contrato recalculado e editável);
+  - quitar e reabrir.
+- **Orçamento mensal** com vigências e planejado × destinado (soma dos pagamentos do mês).
+- **Estratégias:** avalanche (padrão), bola de neve e minha ordem (↑↓). Simulação com bola de neve, timeline, comparação com "só o mínimo" e "E se eu amortizar R$ X?".
+- **Achado no roteiro do navegador:** o mínimo percentual do rotativo travava nos últimos centavos ("Só o mínimo" nunca quitava). Agora é arredondado para cima, e um saldo de até R$ 1,00 é pago inteiro (`revolvingMinimum`).
+- **Roteiro no navegador:** 1440px (claro e escuro), 900px e 390px, sem rolagem horizontal e sem erros no console.
+- **Pendências:**
+  - vínculo com a tabela do mês (`debts.item_id`, `debt_payments.occurrence_id`, e a operação "cancelar as N últimas parcelas");
+  - aportes pontuais (13º);
+  - indexadores reais (TR/IPCA);
+  - multa e mora;
+  - lembretes por email;
+  - arrastar para reordenar;
+  - sincronizar `app-progress`, `app-timeline` e `.ff-table tbody th` com o artifact do Design System (ADR-0009).
+
+## Investimentos em caixinhas (10/11/2026)
+- **Tela "Investimentos"** (`/investimentos`, no menu principal), isolada da tabela do mês (ADR-0012):
+  - caixinhas com nome, ícone, tipo (Caixinha/CDB/RDB, Tesouro, LCI/LCA, Poupança, Outro), rendimento (% do CDI, taxa fixa ao mês ou ao ano, não rende), trava de resgate, imposto, meta e "guardar por mês";
+  - CDI anual da carteira, digitado pela pessoa;
+  - valor inicial ("quanto já tem e desde quando"), aportes e resgates com impostos retidos, saldo informado (âncora);
+  - IR regressivo por aporte e IOF nos primeiros 30 dias; líquido hoje e na data de resgate;
+  - projeção da meta ("chega em mmm/aaaa" ou "não chega; guardando R$ X chega");
+  - gráfico de evolução (12 meses e projeção de 24) em SVG próprio;
+  - encerrar e reabrir; exclusão lógica.
+- **Balanço do mês com destino:** o resumo ganhou `investments` e `debtExtra`. O balanço previsto desconta "guardar em caixinhas" e "amortizar dívidas" (só a amortização extra) e soma o resgatado; o caixa usa só o realizado. O card mostra a conta em linhas, com ⓘ.
+  - **Muda o número do balanço** para quem tem caixinhas com plano, resgates ou orçamento de dívidas. Sem nada disso, o card e os números ficam iguais.
+  - A amortização extra não deve ser lançada também na tabela do mês.
+- **Dívidas:** `simulatePlan` devolve `extraByMonth` (campo novo; o resto não mudou).
+- **Tabela de IR/IOF** conferida em 10/11/2026 (`investments/taxes.ts`).
+- **Roteiro no navegador:** 1440px (claro e escuro), 900px e 390px, sem rolagem horizontal e sem erros no console. Achados corrigidos no roteiro:
+  - o card do Balanço com a conta ficava estreito em 900px (linhas sobrepostas): agora ocupa a linha inteira abaixo de 1280px;
+  - abas do gráfico e o sufixo "% do CDI" quebravam no celular.
+- **Pendências:**
+  - ações, FII e cripto com cotação; IPCA+; busca automática do CDI;
+  - vínculo das linhas "APLICACAO/RESGATE" do extrato com movimentações;
+  - juros por dia útil; come-cotas e custódia;
+  - sincronizar os ícones novos, `app-menu`, `app-iconpick`, `app-invchart` e `app-balance` com o artifact do Design System (ADR-0009).

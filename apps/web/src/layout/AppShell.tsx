@@ -66,6 +66,8 @@ function Sidebar({ me }: { me: Me }) {
       <ul className="ff-nav">
         {item('/', 'dashboard', 'Visão do mês')}
         {item('/importar', 'upload', 'Importar')}
+        {item('/dividas', 'trend', 'Dívidas')}
+        {item('/investimentos', 'piggy', 'Investimentos')}
       </ul>
       <p className="ff-nav__section">Cadastros</p>
       <ul className="ff-nav">

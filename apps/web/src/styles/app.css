@@ -178,3 +178,166 @@ textarea.ff-input { min-height: 88px; padding-top: var(--space-2); padding-botto
   .app-import-confirm { justify-content: stretch; }
   .app-import-confirm .ff-btn { width: 100%; }
 }
+
+/* ---------- Dívidas (ADR-0011). app-progress e app-timeline devem voltar ao artifact do Design System. */
+.app-card-pad { padding: var(--space-4) var(--space-5); display: flex; flex-direction: column; gap: var(--space-3); }
+.app-debt-summary { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.app-debt-summary .ff-summary__body { gap: var(--space-3); }
+.app-debt-summary__value { font-size: 26px; line-height: 34px; }
+.app-debt-summary .ff-btn { align-self: flex-start; }
+.ff-summary--hero .ff-btn--ghost { color: var(--hero-ink); }
+.app-debts { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: var(--space-4); }
+.app-debt { padding: var(--space-4) var(--space-5); display: flex; flex-direction: column; gap: var(--space-3); }
+.app-debt__head { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: var(--space-3); }
+.app-debt__rank { display: grid; place-items: center; width: 32px; height: 32px; border-radius: var(--radius-full); background: var(--primary-soft); color: var(--primary-ink); font-weight: 700; font-variant-numeric: tabular-nums; }
+.app-debt__name { margin: 0; font-size: 18px; line-height: 26px; font-weight: 600; overflow-wrap: anywhere; }
+.app-debt__balance { text-align: right; }
+.app-debt__amount { margin: 0; font-size: 22px; line-height: 30px; font-weight: 700; }
+.app-debt__move { display: flex; gap: 2px; }
+.app-debt__facts { margin: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-3); }
+.app-debt__facts dt { font-size: 13px; line-height: 18px; font-weight: 500; color: var(--ink-muted); }
+.app-debt__facts dd { margin: 0; font-weight: 600; font-variant-numeric: tabular-nums; }
+.app-debt__badges { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.app-debt__badges:empty { display: none; }
+.app-progress { height: 10px; border-radius: var(--radius-full); background: var(--surface-subtle); border: 1px solid var(--border); overflow: hidden; }
+.app-progress__bar { display: block; height: 100%; background: var(--primary); border-radius: var(--radius-full); }
+.app-rate { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-2); align-items: center; }
+.app-plain-list { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; }
+.app-plain-list__row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); padding: var(--space-2) 0; border-top: 1px solid var(--border); }
+.app-plain-list__row:first-child { border-top: 0; }
+.app-paidoff > summary { cursor: pointer; }
+.app-amount-short { color: var(--danger-ink); font-weight: 700; }
+.ff-table tbody tr.app-row-selected > * { background: var(--primary-soft); }
+/* Cabeçalho de linha (th no corpo): mesma aparência das células, não a do cabeçalho da tabela. */
+.ff-table tbody th { position: static; height: var(--row-h); padding: var(--space-2) var(--space-4); background: transparent; border-bottom: 1px solid var(--border); color: var(--ink); font-size: 15px; line-height: 22px; font-weight: 600; }
+.ff-table tbody tr:last-child > th { border-bottom: 0; }
+.app-whatif th, .app-whatif td { padding-left: var(--space-2); padding-right: var(--space-2); }
+.app-whatif tbody th { white-space: normal; }
+.app-whatif td.is-num { white-space: normal; }
+/* Timeline: uma faixa por dívida; área do saldo em tokens, rótulos em HTML. */
+.app-timeline { display: flex; flex-direction: column; gap: var(--space-2); }
+.app-timeline__row { display: grid; grid-template-columns: minmax(96px, 180px) minmax(0, 1fr); align-items: center; gap: var(--space-3); }
+.app-timeline__name { margin: 0; font-size: 14px; line-height: 20px; font-weight: 600; overflow-wrap: anywhere; }
+.app-timeline__track { position: relative; height: 44px; border-bottom: 1px solid var(--border); }
+.app-timeline__track svg { display: block; width: 100%; height: 100%; }
+.app-timeline__area { fill: var(--primary-soft); stroke: var(--primary); stroke-width: 1.5; }
+.app-timeline__end { position: absolute; top: 0; bottom: 0; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; transform: translateX(-50%); pointer-events: none; }
+.app-timeline__dot { width: 10px; height: 10px; margin-bottom: -5px; border-radius: var(--radius-full); background: var(--primary); border: 2px solid var(--surface); }
+.app-timeline__label { position: absolute; top: 0; padding: 0 4px; border-radius: var(--radius-sm); background: var(--surface); font-size: 12px; line-height: 16px; font-weight: 600; color: var(--ink); white-space: nowrap; }
+.app-timeline__label--start { left: -5px; }
+.app-timeline__label--end { right: -5px; }
+.app-timeline__axisrow { align-items: start; }
+.app-timeline__axis { position: relative; height: 18px; font-size: 12px; line-height: 16px; color: var(--ink-muted); font-variant-numeric: tabular-nums; }
+.app-timeline__axis span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
+.app-timeline__axis span.is-end { transform: translateX(-100%); }
+.app-timeline__text { margin: var(--space-2) 0 0; padding: 0 0 0 var(--space-4); font-size: 14px; line-height: 20px; color: var(--ink-muted); }
+.app-timeline__text strong { color: var(--ink); }
+@media (max-width: 1279px) {
+  .app-debt-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 1023px) {
+  .app-debt__facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 767px) {
+  .app-debt-summary { grid-template-columns: 1fr; }
+  .app-debt { padding: var(--space-3) var(--space-4); }
+  .app-debt__head { grid-template-columns: auto minmax(0, 1fr) auto; }
+  .app-debt__balance { grid-column: 2 / -1; text-align: left; }
+  .app-debt__move { grid-row: 1; grid-column: 3; }
+  .app-timeline__row { grid-template-columns: minmax(0, 1fr); gap: var(--space-1); }
+  .app-timeline__axisrow > span:first-child { display: none; }
+  .app-rate { grid-template-columns: 1fr; }
+  .app-actions-row .ff-btn--sm { flex: 1 1 auto; }
+}
+
+/* ---------- Investimentos em caixinhas (ADR-0012). Só tokens; app-menu, app-iconpick e app-invchart devem voltar ao artifact do Design System. */
+.app-invs { margin: 0; padding: 0; list-style: none; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-4); }
+.app-inv { padding: var(--space-4) var(--space-5); display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; }
+.app-inv__head { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: var(--space-3); }
+.app-inv__icon { display: grid; place-items: center; width: 40px; height: 40px; border-radius: var(--radius-md); background: var(--primary-soft); color: var(--primary-ink); }
+.app-inv__icon svg { width: 22px; height: 22px; }
+.app-inv__name { margin: 0; font-size: 17px; line-height: 24px; font-weight: 600; overflow-wrap: anywhere; }
+.app-inv__amount { margin: 0; font-size: 24px; line-height: 32px; font-weight: 700; }
+.app-inv__goal { display: flex; flex-direction: column; gap: var(--space-1); align-items: stretch; }
+.app-inv__goal .ff-btn { align-self: flex-start; }
+.app-inv__goaltext { margin: 0; display: flex; align-items: center; gap: var(--space-1); font-size: 14px; line-height: 20px; font-weight: 600; color: var(--ink); }
+.app-inv__goaltext svg { width: 16px; height: 16px; flex: none; color: var(--success-ink); }
+.app-inv__goaltext.is-warn { color: var(--warning-ink); }
+.app-inv__goaltext.is-warn svg { color: var(--warning-ink); }
+.app-inv__facts { margin: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-2) var(--space-3); }
+.app-inv__facts dt { font-size: 13px; line-height: 18px; font-weight: 500; color: var(--ink-muted); }
+.app-inv__facts dd { margin: 0; font-weight: 600; font-variant-numeric: tabular-nums; }
+.app-inv__lock { align-self: flex-start; margin: 0; }
+.app-inv .app-actions-row { margin-top: auto; }
+/* Menu de ações: details/summary nativo (teclado e leitor de tela sem JS extra). */
+.app-menu { position: relative; }
+.app-menu > summary { list-style: none; }
+.app-menu > summary::-webkit-details-marker { display: none; }
+.app-menu > summary:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.app-menu__list { position: absolute; right: 0; top: calc(100% + 4px); z-index: 20; min-width: 180px; display: flex; flex-direction: column; padding: var(--space-1); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md); box-shadow: var(--shadow-modal); }
+.app-menu__list button { all: unset; padding: var(--space-2) var(--space-3); border-radius: var(--radius-sm); font-size: 15px; line-height: 22px; color: var(--ink); cursor: pointer; }
+.app-menu__list button:hover { background: var(--surface-subtle); }
+.app-menu__list button:focus-visible { outline: 2px solid var(--focus-ring); }
+.app-menu__list button:disabled { color: var(--ink-muted); cursor: not-allowed; }
+/* Formulário */
+.app-fieldset { margin: 0; padding: 0; border: 0; display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; }
+.app-iconpick { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.app-iconpick__item { display: grid; place-items: center; width: 44px; height: 44px; border-radius: var(--radius-md); border: 1px solid var(--border-control); background: var(--surface); color: var(--ink-muted); cursor: pointer; }
+.app-iconpick__item svg { width: 22px; height: 22px; }
+.app-iconpick__item:hover { color: var(--ink); background: var(--surface-subtle); }
+.app-iconpick__item[aria-checked="true"] { border-color: var(--primary); background: var(--primary-soft); color: var(--primary-ink); box-shadow: 0 0 0 1px var(--primary); }
+.app-iconpick__item:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.app-form--tight { gap: var(--space-2); }
+.ff-money > span { white-space: nowrap; }
+.app-more > summary { cursor: pointer; margin-bottom: var(--space-3); }
+/* Gráfico de evolução: área do saldo, linha do aportado, projeção tracejada. */
+.app-invchart { display: flex; flex-direction: column; gap: var(--space-2); }
+.app-invchart__legend { margin: 0; padding: 0; list-style: none; display: flex; gap: var(--space-4); font-size: 14px; line-height: 20px; color: var(--ink-muted); }
+.app-invchart__legend li { display: flex; align-items: center; gap: var(--space-2); }
+.app-invchart__swatch { display: inline-block; width: 16px; height: 10px; border-radius: 2px; }
+.app-invchart__swatch--gross { background: var(--primary-soft); border: 2px solid var(--primary); }
+.app-invchart__swatch--principal { height: 0; border-top: 2px solid var(--ink-muted); }
+.app-invchart__plot { position: relative; height: 200px; margin-top: var(--space-4); border-bottom: 1px solid var(--border); }
+.app-invchart__plot svg { display: block; width: 100%; height: 100%; overflow: visible; }
+.app-invchart__max { position: absolute; top: calc(-1 * var(--space-4)); left: 0; font-size: 12px; line-height: 16px; color: var(--ink-muted); }
+.app-invchart__area { fill: var(--primary-soft); stroke: none; }
+.app-invchart__gross { fill: none; stroke: var(--primary); stroke-width: 2; }
+.app-invchart__principal { fill: none; stroke: var(--ink-muted); stroke-width: 1.5; }
+.app-invchart__gross.is-projected, .app-invchart__principal.is-projected { stroke-dasharray: 5 4; }
+.app-invchart__today { position: absolute; top: 0; bottom: 0; border-left: 1px dashed var(--ink-muted); pointer-events: none; }
+.app-invchart__today span { position: absolute; top: 0; left: 4px; font-size: 12px; line-height: 16px; font-weight: 600; color: var(--ink-muted); background: var(--surface); padding: 0 2px; }
+.app-invchart__today.is-end span { left: auto; right: 4px; }
+.app-invchart__axis { position: relative; height: 18px; font-size: 12px; line-height: 16px; color: var(--ink-muted); font-variant-numeric: tabular-nums; }
+.app-invchart__axis span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
+.app-invchart__axis span.is-start { transform: none; }
+.app-invchart__axis span.is-end { transform: translateX(-100%); }
+/* Balanço do mês com a conta à mostra (card hero). */
+.app-balance__tag { font-size: 14px; line-height: 20px; font-weight: 500; color: var(--hero-muted); letter-spacing: 0; }
+.app-balance { margin: 0; display: flex; flex-direction: column; gap: 2px; font-size: 14px; line-height: 20px; }
+.app-balance__line { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 0 var(--space-3); padding: 2px 0; border-top: 1px solid var(--hero-line); }
+.app-balance__line:first-child { border-top: 0; }
+.app-balance__line dt { display: flex; align-items: center; gap: var(--space-1); min-width: 0; color: var(--hero-muted); }
+.app-balance__line dd { margin: 0; font-weight: 600; color: var(--hero-ink); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.app-balance__info { display: inline-grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: var(--radius-full); background: transparent; color: var(--hero-ink); cursor: pointer; }
+.app-balance__info svg { width: 16px; height: 16px; }
+.app-balance__info:hover { background: var(--hero-line); }
+.app-balance__info:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.app-balance__explain { grid-column: 1 / -1; margin: 0 0 var(--space-1); color: var(--hero-ink); font-size: 13px; line-height: 18px; }
+.app-balance__explain a { color: var(--hero-ink); font-weight: 600; }
+@media (max-width: 1279px) {
+  .app-invs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  /* Com a conta à mostra, o Balanço ocupa a linha inteira; Entradas e Gastos dividem a de baixo. */
+  .ff-summary-grid:has(> .app-balance-card) { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ff-summary-grid > .app-balance-card { grid-column: 1 / -1; }
+}
+@media (max-width: 767px) {
+  .ff-summary-grid:has(> .app-balance-card) { grid-template-columns: 1fr; }
+}
+@media (max-width: 767px) {
+  .app-invs { grid-template-columns: 1fr; }
+  .app-inv { padding: var(--space-3) var(--space-4); }
+  .app-invchart__plot { height: 160px; }
+  /* Período do gráfico numa linha só: as abas dividem a largura. */
+  .app-invchart .ff-tabs { display: flex; width: 100%; }
+  .app-invchart .ff-tab { flex: 1 1 auto; padding: 0 var(--space-2); white-space: nowrap; font-size: 14px; }
+}

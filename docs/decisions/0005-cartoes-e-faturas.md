@@ -15,7 +15,7 @@
   - Real ≠ soma dos itens → item de sistema **"Ajuste da fatura"** com a diferença (pode ser negativo). Um por fatura, recalculado.
   - Pago < real → **parcialmente paga**: o restante vira automaticamente o item **"Saldo restante da fatura <mês> · <cartão>"** na fatura seguinte e esta fica `carried` (encerrada), deixando de contar como atraso — o valor nunca conta duas vezes. Juros aparecem pelo ajuste da fatura seguinte.
   - Fatura paga ou encerrada não aceita outro pagamento (`invoice_closed`).
-- **Desfazer pagamento:** remove o pagamento e o saldo transferido e reabre a fatura; bloqueado se a fatura seguinte (que contém o saldo) já foi paga.
+- **Desfazer pagamento:** remove o pagamento, o saldo transferido e o "Ajuste da fatura" e reabre a fatura; bloqueado se a fatura seguinte (que contém o saldo) já foi paga. O valor real informado fica guardado e volta preenchido no próximo pagamento. O ajuste não pode ser excluído à mão (deixaria a fatura paga com total diferente do banco): desfaz-se o pagamento.
 - **Mover item de fatura:** só entre faturas abertas do mesmo cartão (anterior/seguinte na interface).
 - **Bloco "Faturas do mês"** acima da tabela de despesas: uma linha por cartão com itens no mês, mais faturas **atrasadas** de meses anteriores quando o mês é o atual. Continua pelo vencimento e mostra o **período das compras** de cada fatura (`purchasesFrom` = fechamento da anterior, `purchasesTo` = véspera do fechamento), porque as compras dela aparecem na tabela nos meses em que foram feitas.
 

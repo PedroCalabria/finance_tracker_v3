@@ -203,6 +203,9 @@ describe('cartão e faturas', () => {
     expect(find(await occ('2026-12'), 'Saldo restante da fatura nov/2026 · BB Crédito')).toBeUndefined();
     const reopened = (await c.get(c.w('/invoices?month=2026-11'))).json().find((i: any) => i.account.id === cards.bb);
     expect(reopened.status).toBe('open');
+    // ...e tira o ajuste: a fatura aberta volta a somar só o que foi lançado
+    expect(find(await occ('2026-11'), 'Ajuste da fatura')).toBeUndefined();
+    expect([reopened.itemsCents, reopened.realAmountCents]).toEqual([8000 + 45000, 54000]);
   });
   it('pagamento total quita a fatura', async () => {
     const bb = (await c.get(c.w('/invoices?month=2026-11'))).json().find((i: any) => i.account.id === cards.bb);

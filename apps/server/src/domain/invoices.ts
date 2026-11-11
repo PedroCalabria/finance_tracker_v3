@@ -239,9 +239,12 @@ export async function deleteInvoicePayment(db: DB, walletId: string, paymentId: 
     await tx.delete(invoicePayments).where(eq(invoicePayments.id, pay.id));
     const remaining = await paidSum(tx, inv.id);
     const total = inv.realAmountCents ?? (await itemsSum(tx, inv.id)).cents;
+    const status = remaining >= total && remaining > 0 ? 'paid' : 'open';
+    // Fatura reaberta volta a somar só o que foi lançado: o ajuste nasce de novo no próximo pagamento.
+    if (status === 'open') await tx.delete(items).where(and(eq(items.sourceInvoiceId, inv.id), eq(items.systemKind, 'invoice_adjustment')));
     await tx
       .update(invoices)
-      .set({ status: remaining >= total && remaining > 0 ? 'paid' : 'open', carriedToInvoiceId: null, version: sql`${invoices.version} + 1` })
+      .set({ status, carriedToInvoiceId: null, version: sql`${invoices.version} + 1` })
       .where(eq(invoices.id, inv.id));
   });
 }

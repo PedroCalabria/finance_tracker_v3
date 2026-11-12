@@ -30,10 +30,15 @@ describe('reembolso: entrada gerada por uma despesa de outra pessoa', () => {
     valid(noDue);
   });
 
-  it('única no crédito: recebe na data da compra (mesmo mês do gasto), sem conta', () => {
-    const r = reimbursementInput(expense({ form: 'single', method: 'credit', date: '2026-11-12', accountId: CARD }));
+  it('única no crédito: recebe no dia da compra, no mês do gasto, sem conta', () => {
+    const r = reimbursementInput(expense({ form: 'single', method: 'credit', date: '2026-11-12', chargeMonth: '2026-11', accountId: CARD }));
     expect(r).toMatchObject({ form: 'single', method: 'pix', accountId: null, date: '2026-11-12', dueDate: '2026-11-12' });
     valid(r);
+    // Compra de 30/10 depois do fechamento (dia 28): conta em novembro, e o reembolso também.
+    expect(reimbursementInput(expense({ form: 'single', method: 'credit', date: '2026-10-30', chargeMonth: '2026-11', accountId: CARD }))).toMatchObject({
+      date: '2026-11-30',
+      dueDate: '2026-11-30',
+    });
   });
 
   it('parcelada fora do crédito: mesma 1ª data e mesmo nº de parcelas', () => {
@@ -43,10 +48,13 @@ describe('reembolso: entrada gerada por uma despesa de outra pessoa', () => {
     valid(r);
   });
 
-  it('parcelada no crédito: 1ª parcela na data da compra, as demais nos meses seguintes', () => {
-    const r = reimbursementInput(expense({ form: 'installment', method: 'credit', installments: 3, date: '2026-11-12', accountId: CARD }));
+  it('parcelada no crédito: 1ª parcela no mês do gasto da 1ª, as demais nos meses seguintes', () => {
+    const r = reimbursementInput(expense({ form: 'installment', method: 'credit', installments: 3, date: '2026-11-12', chargeMonth: '2026-11', accountId: CARD }));
     expect(r).toMatchObject({ form: 'installment', installments: 3, date: '2026-11-12', accountId: null, method: 'pix' });
     valid(r);
+    expect(reimbursementInput(expense({ form: 'installment', method: 'credit', installments: 3, date: '2027-01-31', chargeMonth: '2027-02', accountId: CARD }))).toMatchObject({
+      date: '2027-02-28',
+    });
   });
 
   it('recorrente fora do crédito: mesmo mês de início, mesmo dia e "valor varia"', () => {
@@ -56,10 +64,15 @@ describe('reembolso: entrada gerada por uma despesa de outra pessoa', () => {
     valid(r);
   });
 
-  it('recorrente no crédito: mesmo mês de início, no dia da cobrança', () => {
-    const r = reimbursementInput(expense({ form: 'recurring', method: 'credit', startMonth: '2026-11', day: 28, accountId: CARD }));
-    expect(r).toMatchObject({ form: 'recurring', startMonth: '2026-11', day: 28, accountId: null, variableAmount: false });
+  it('recorrente no crédito: começa no mês do gasto da 1ª cobrança, no dia da cobrança', () => {
+    const r = reimbursementInput(expense({ form: 'recurring', method: 'credit', startMonth: '2026-11', day: 10, chargeMonth: '2026-11', accountId: CARD }));
+    expect(r).toMatchObject({ form: 'recurring', startMonth: '2026-11', day: 10, accountId: null, variableAmount: false });
     valid(r);
+    // Cobrança dia 28 num cartão que fecha dia 25: a de 28/11 conta em dezembro.
+    expect(reimbursementInput(expense({ form: 'recurring', method: 'credit', startMonth: '2026-11', day: 28, chargeMonth: '2026-12', accountId: CARD }))).toMatchObject({
+      startMonth: '2026-12',
+      day: 28,
+    });
   });
 });
 

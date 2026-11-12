@@ -3,8 +3,9 @@ import type { Client, TestEnv } from './helpers';
 import { setup, signedIn } from './helpers';
 
 /**
- * Mês do gasto (ADR-0004, ADR-0005): no crédito, a tabela e os cards usam o mês da
- * compra; a fatura continua pelo vencimento. Hoje: 03/11/2026.
+ * Mês do gasto (ADR-0004, ADR-0005): no crédito, a tabela e os cards usam o mês do
+ * período de compras da fatura (o mês com a maior parte dele); a fatura continua pelo
+ * vencimento. Hoje: 03/11/2026.
  */
 let env: TestEnv;
 let c: Client;
@@ -45,10 +46,48 @@ describe('mês do gasto na tabela', () => {
     expect(find(await occ('2026-12'), 'Tênis')).toBeUndefined();
   });
 
-  it('compra depois do fechamento: mesmo mês do gasto, fatura dois meses depois', async () => {
+  it('compra depois do fechamento: conta no mês do período da fatura seguinte', async () => {
+    // Fatura de jan: compras de 25/11 a 24/12 → dezembro.
     await create({ accountId: nu, description: 'Jaqueta', amountCents: 20000, date: '2026-11-27' });
-    const row = find(await occ('2026-11'), 'Jaqueta');
-    expect([row.chargeMonth, row.invoice.referenceMonth]).toEqual(['2026-11', '2027-01']);
+    expect(find(await occ('2026-11'), 'Jaqueta')).toBeUndefined();
+    const row = find(await occ('2026-12'), 'Jaqueta');
+    expect([row.chargeMonth, row.invoice.referenceMonth]).toEqual(['2026-12', '2027-01']);
+  });
+
+  it('cartão que fecha no fim do mês: a compra depois do fechamento já conta no mês seguinte', async () => {
+    const xp = (await c.post(c.w('/accounts'), { name: 'XP', bank: 'XP', kind: 'credit_card', closingDay: 28, dueDay: 5 })).json().id as string;
+    const preview = (await c.get(c.w(`/invoice-preview?account=${xp}&date=2026-10-30`))).json();
+    expect(preview).toEqual({ referenceMonth: '2026-12', closingDate: '2026-11-28', dueDate: '2026-12-05', chargeMonth: '2026-11' });
+    await create({ accountId: xp, description: 'Uber', amountCents: 1774, date: '2026-10-30' });
+    expect(find(await occ('2026-10'), 'Uber')).toBeUndefined();
+    expect(find(await occ('2026-11'), 'Uber')).toMatchObject({ chargeMonth: '2026-11', competenceMonth: '2026-12' });
+  });
+
+  it('cartão que fecha no começo do mês: conta no mês com a maior parte do período', async () => {
+    const bb = (await c.post(c.w('/accounts'), { name: 'BB', bank: 'Banco do Brasil', kind: 'credit_card', closingDay: 3, dueDay: 10 })).json().id as string;
+    // Fatura de nov: compras de 03/10 a 02/11 → outubro.
+    await create({ accountId: bb, description: 'Padaria', amountCents: 1500, date: '2026-11-01' });
+    expect(find(await occ('2026-10'), 'Padaria')).toMatchObject({ chargeMonth: '2026-10', competenceMonth: '2026-11' });
+  });
+
+  it('mover de fatura leva o mês do gasto da fatura nova', async () => {
+    const item = await create({ accountId: nu, description: 'Livro', amountCents: 5000, date: '2026-11-20' });
+    const o = item.occurrences[0];
+    expect([o.chargeMonth, o.invoice.referenceMonth]).toEqual(['2026-11', '2026-12']);
+    const res = await c.patch(c.w(`/occurrences/${o.id}/invoice`), { referenceMonth: '2027-01' });
+    expect(res.statusCode).toBe(200);
+    expect(find(await occ('2026-12'), 'Livro')).toMatchObject({ chargeMonth: '2026-12', competenceMonth: '2027-01' });
+  });
+
+  it('ajustar o fechamento recalcula o mês do gasto da fatura e da seguinte', async () => {
+    const d = await signedIn(env, 'ajuste@example.com', 'Ajuste');
+    const k = await card(d);
+    await create({ accountId: k, description: 'Cinema', amountCents: 4000, date: '2026-10-26' }, d);
+    expect(find(await occ('2026-11', d), 'Cinema').invoice.referenceMonth).toBe('2026-12');
+    // A fatura de dez passa a fechar em 27/10: compras de 25/10 a 26/10 → outubro.
+    const dec = await invoice('2026-12', k, d);
+    expect((await d.patch(d.w(`/invoices/${dec.id}`), { closingDate: '2026-10-27', dueDate: '2026-12-01' })).statusCode).toBe(200);
+    expect(find(await occ('2026-10', d), 'Cinema').chargeMonth).toBe('2026-10');
   });
 
   it('parcelada: cada parcela no seu mês do gasto, nas faturas seguintes', async () => {
@@ -85,34 +124,46 @@ describe('mês do gasto na tabela', () => {
   it('a navegação começa no mês da compra mais antiga', async () => {
     const d = await signedIn(env, 'nav@example.com', 'Nav');
     const k = await card(d);
-    // 30/08 é depois do fechamento de 25/08: cai na fatura de out (fecha 25/09).
+    // 30/08 é depois do fechamento de 25/08: cai na fatura de out (compras de 25/08 a 24/09 → setembro).
     await create({ accountId: k, description: 'Antiga', amountCents: 1000, date: '2026-08-30' }, d);
-    expect(((await d.get(d.w('/months'))).json() as Row).firstMonth).toBe('2026-08');
+    expect(((await d.get(d.w('/months'))).json() as Row).firstMonth).toBe('2026-09');
   });
 });
 
 describe('recorrente no crédito pelo mês da cobrança', () => {
-  it('a cobrança do mês é gravada; a do mês seguinte é prevista no mês dela', async () => {
+  it('a cobrança do mês é gravada e conta no mês da fatura dela; a seguinte é prevista', async () => {
     const item = await create({ form: 'recurring', accountId: nu, description: 'Música', amountCents: 2190, startMonth: '2026-11', day: 28 });
-    const nov = find(await occ('2026-11'), 'Música');
-    expect([nov.projected, nov.chargeMonth, nov.invoice.referenceMonth]).toEqual([false, '2026-11', '2027-01']);
+    // 28/11 cai na fatura de jan (compras de 25/11 a 24/12): gravada, conta em dezembro.
+    expect(find(await occ('2026-11'), 'Música')).toBeUndefined();
     const dec = find(await occ('2026-12'), 'Música');
-    expect([dec.projected, dec.chargeMonth, dec.competenceMonth]).toEqual([true, '2026-12', '2027-02']);
-    expect(find(await occ('2027-01'), 'Música').chargeMonth).toBe('2027-01');
-    // O detalhe mostra a cobrança de novembro e a próxima prevista.
+    expect([dec.projected, dec.chargeMonth, dec.invoice.referenceMonth]).toEqual([false, '2026-12', '2027-01']);
+    // 28/12 cai na fatura de fev: prevista em janeiro.
+    const jan = find(await occ('2027-01'), 'Música');
+    expect([jan.projected, jan.chargeMonth, jan.competenceMonth]).toEqual([true, '2027-01', '2027-02']);
+    expect(find(await occ('2027-02'), 'Música').chargeMonth).toBe('2027-02');
+    // O detalhe mostra a cobrança gravada e a próxima prevista.
     const detail = (await c.get(c.w(`/items/${item.id}`))).json();
     expect(detail.occurrences.map((o: Row) => [o.chargeMonth, o.projected])).toEqual([
-      ['2026-11', false],
-      ['2026-12', true],
+      ['2026-12', false],
+      ['2027-01', true],
     ]);
   });
 
-  it('"Só este mês" na cobrança de novembro sai do total da fatura de janeiro', async () => {
+  it('"Só este mês" na cobrança de 28/11 sai do total da fatura de janeiro', async () => {
     const before = await invoice('2027-01', nu);
-    const nov = find(await occ('2026-11'), 'Música');
-    expect((await c.post(c.w(`/occurrences/${nov.id}/cancel`))).statusCode).toBe(200);
+    const dec = find(await occ('2026-12'), 'Música');
+    expect((await c.post(c.w(`/occurrences/${dec.id}/cancel`))).statusCode).toBe(200);
     expect(before.itemsCents - (await invoice('2027-01', nu)).itemsCents).toBe(2190);
-    expect(find(await occ('2026-12'), 'Música').projected).toBe(true);
+    expect(find(await occ('2027-01'), 'Música').projected).toBe(true);
+  });
+
+  it('cobrança do mês seguinte que conta no mês atual é gravada', async () => {
+    const d = await signedIn(env, 'cedo@example.com', 'Cedo');
+    // Fecha 3, vence 10: a cobrança de 01/12 fica na fatura de dez (compras de 03/11 a 02/12) → novembro.
+    const bb = (await d.post(d.w('/accounts'), { name: 'BB', bank: 'Banco do Brasil', kind: 'credit_card', closingDay: 3, dueDay: 10 })).json().id as string;
+    await create({ form: 'recurring', accountId: bb, description: 'Nuvem', amountCents: 990, startMonth: '2026-12', day: 1 }, d);
+    expect(find(await occ('2026-11', d), 'Nuvem')).toMatchObject({ projected: false, chargeMonth: '2026-11', competenceMonth: '2026-12' });
+    expect(find(await occ('2026-12', d), 'Nuvem')).toMatchObject({ projected: true, chargeMonth: '2026-12', competenceMonth: '2027-01' });
   });
 });
 

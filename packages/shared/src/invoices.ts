@@ -1,4 +1,4 @@
-import { addMonths, compareDates, dateInMonth, type ISODate, type Month, monthOf } from './dates';
+import { addDays, addMonths, compareDates, dateInMonth, daysBetween, type ISODate, type Month, monthOf } from './dates';
 
 /**
  * Regras de fatura (ADR-0005). Uma fatura é identificada pelo mês do VENCIMENTO
@@ -35,4 +35,22 @@ export function invoiceMonthForPurchase(
     month = addMonths(month, 1);
   }
   return month;
+}
+
+/**
+ * Mês do gasto (`charge_month`) das compras de uma fatura (ADR-0005): o mês em que cai a
+ * maior parte do período de compras dela, do fechamento da anterior até a véspera do seu.
+ * Fecha dia 28: compras de 28/10 a 27/11 contam como novembro. Fecha dia 3: compras de
+ * 03/10 a 02/11 contam como outubro. Empate (metade em cada mês): o primeiro.
+ */
+export function invoiceChargeMonth(
+  referenceMonth: Month,
+  closingDay: number,
+  dueDay: number,
+  overrides: ReadonlyMap<Month, InvoiceDates> = new Map(),
+): Month {
+  const closing = (m: Month) => (overrides.get(m) ?? defaultInvoiceDates(m, closingDay, dueDay)).closingDate;
+  const from = closing(addMonths(referenceMonth, -1));
+  const days = daysBetween(from, closing(referenceMonth));
+  return monthOf(addDays(from, Math.max(0, Math.floor((days - 1) / 2))));
 }

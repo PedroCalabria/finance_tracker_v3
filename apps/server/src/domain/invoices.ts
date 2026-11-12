@@ -15,7 +15,7 @@ import type { DB, Tx } from '../db/client';
 import { accounts, attachments, invoicePayments, invoices, items, occurrences } from '../db/schema';
 import { AppError, badRequest, conflict, notFound } from '../http/errors';
 import type { Clock } from './clock';
-import { ensureInvoice, invoiceMonthFor } from './invoice-core';
+import { chargeMonthResolver, ensureInvoice, invoiceMonthFor, syncChargeMonths } from './invoice-core';
 import { projectedCreditCharges } from './projections';
 
 /**
@@ -33,7 +33,8 @@ export async function previewInvoice(tx: Tx, walletId: string, accountId: string
   const referenceMonth = await invoiceMonthFor(tx, account, date);
   const existing = await tx.query.invoices.findFirst({ where: and(eq(invoices.accountId, account.id), eq(invoices.referenceMonth, referenceMonth)) });
   const d = existing ?? defaultInvoiceDates(referenceMonth, account.closingDay!, account.dueDay!);
-  return { referenceMonth, closingDate: d.closingDate, dueDate: d.dueDate };
+  const chargeMonth = (await chargeMonthResolver(tx, account, referenceMonth))(referenceMonth);
+  return { referenceMonth, closingDate: d.closingDate, dueDate: d.dueDate, chargeMonth };
 }
 
 /** Soma dos itens de uma fatura (ocorrências não canceladas, ajuste incluído). */
@@ -273,6 +274,11 @@ export async function updateInvoiceDatesTx(tx: Tx, walletId: string, invoiceId: 
     .where(eq(invoices.id, inv.id))
     .returning();
   await tx.update(occurrences).set({ dueDate }).where(eq(occurrences.invoiceId, inv.id));
+  // O fechamento muda o período de compras desta fatura e o da seguinte.
+  if (closingDate !== inv.closingDate) {
+    const account = (await tx.query.accounts.findFirst({ where: eq(accounts.id, inv.accountId) }))!;
+    await syncChargeMonths(tx, account, [inv.referenceMonth, addMonths(inv.referenceMonth, 1)]);
+  }
   return toInvoiceRow(tx, u!, clock);
 }
 
@@ -297,6 +303,8 @@ export async function moveToInvoice(tx: Tx, walletId: string, occurrenceId: stri
     .update(occurrences)
     .set({ invoiceId: target.id, competenceMonth: referenceMonth, dueDate: target.dueDate, version: sql`${occurrences.version} + 1` })
     .where(eq(occurrences.id, occ.id));
+  // O mês do gasto acompanha a fatura (o período de compras em que o banco pôs a compra).
+  await syncChargeMonths(tx, account, [referenceMonth]);
 }
 
 export async function linkAttachments(

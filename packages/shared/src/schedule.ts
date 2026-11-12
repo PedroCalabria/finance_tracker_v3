@@ -1,4 +1,4 @@
-import { addMonths, addMonthsToDate, dateInMonth, monthOf, type ISODate, type Month } from './dates';
+import { addMonthsToDate, dateInMonth, type ISODate, type Month } from './dates';
 import type { Method } from './domain';
 
 /**
@@ -38,15 +38,4 @@ export function installmentDueDates(firstDue: ISODate, n: number): ISODate[] {
 /** Data da 1ª parcela a partir da data de uma parcela na posição `position` (1 = a primeira). */
 export function firstInstallmentDue(thisDue: ISODate, position: number): ISODate {
   return addMonthsToDate(thisDue, -(Math.max(1, position) - 1));
-}
-
-/**
- * Mês do gasto (`charge_month`) de uma compra no crédito: o mês em que ela aconteceu,
- * não o da fatura (ADR-0004, ADR-0005). Na parcelada, a parcela k fica k − 1 meses
- * depois. Nas parcelas antigas importadas da fatura ("PARC n/m"), `firstChargeMonth`
- * é o mês da 1ª parcela importada (mês da compra + n − 1).
- */
-export function chargeMonthOf(input: { purchaseDate: ISODate; installment?: number | null; firstChargeMonth?: Month | null }): Month {
-  const first = input.firstChargeMonth ?? monthOf(input.purchaseDate);
-  return addMonths(first, Math.max(1, input.installment ?? 1) - 1);
 }

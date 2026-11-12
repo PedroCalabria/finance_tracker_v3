@@ -32,7 +32,7 @@ import { readImportFile } from '../../imports/read-file';
 import type { Clock } from '../clock';
 import { toInvoiceRow } from '../invoices';
 import { buildRows, projectedRow } from '../occurrences';
-import { chargeMonthFor, ensureMaterialized, projectionsFor } from '../projections';
+import { ensureMaterialized, projectionsFor, ruleMonthFor } from '../projections';
 import { fingerprintOf, sameBank } from './fingerprint';
 
 /**
@@ -253,16 +253,16 @@ async function invoiceCandidates(tx: Tx, walletId: string, card: AccountRec, ref
       if (p.item.method !== 'credit' || p.item.accountId !== card.id) continue;
       const c = cats.find((x) => x.id === p.item.categoryId);
       const row = projectedRow(p, c ? { id: c.id, name: c.name } : null);
-      out.push({ target: occurrenceTarget(row), type: row.type, match: { ...(await invoiceMatch(tx, p.item, row, refMonth, p.chargeMonth)) } });
+      out.push({ target: occurrenceTarget(row), type: row.type, match: { ...(await invoiceMatch(tx, p.item, row, refMonth, p.ruleMonth)) } });
     }
   }
   return out;
 }
 
 /** Data de compra do item no crédito: a do cadastro; na recorrente, o dia da cobrança no mês da cobrança. */
-async function invoiceMatch(tx: Tx, item: ItemRec, row: OccurrenceRow, refMonth: Month, chargeMonth?: Month): Promise<MatchCandidate> {
+async function invoiceMatch(tx: Tx, item: ItemRec, row: OccurrenceRow, refMonth: Month, ruleMonth?: Month): Promise<MatchCandidate> {
   let date = item.entryDate;
-  if (item.form === 'recurring') date = dateInMonth(chargeMonth ?? (await chargeMonthFor(tx, item, refMonth)), Number(item.entryDate.slice(8, 10)));
+  if (item.form === 'recurring') date = dateInMonth(ruleMonth ?? (await ruleMonthFor(tx, item, refMonth)), Number(item.entryDate.slice(8, 10)));
   const variable = item.form === 'recurring' && item.variableAmount;
   return {
     key: row.id,

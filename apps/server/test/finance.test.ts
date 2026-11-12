@@ -218,8 +218,8 @@ describe('cartão e faturas', () => {
     const row = find(await occ('2026-11'), 'Farmácia');
     expect(row.invoice.referenceMonth).toBe('2026-12');
     const moved = (await c.patch(c.w(`/occurrences/${row.id}/invoice`), { referenceMonth: '2027-01' })).json();
-    // Mover de fatura não muda o mês do gasto.
-    expect([moved.competenceMonth, moved.dueDate, moved.chargeMonth]).toEqual(['2027-01', '2027-01-01', '2026-11']);
+    // O mês do gasto acompanha a fatura nova (compras de 25/11 a 24/12 → dezembro).
+    expect([moved.competenceMonth, moved.dueDate, moved.chargeMonth]).toEqual(['2027-01', '2027-01-01', '2026-12']);
   });
   it('recorrente no crédito entra nas faturas e projeta nos meses futuros', async () => {
     await create({ description: 'Netflix', form: 'recurring', method: 'credit', accountId: cards.nu, amountCents: 5590, startMonth: '2026-11', day: 15 });

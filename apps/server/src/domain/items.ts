@@ -2,7 +2,6 @@ import { randomUUID } from 'node:crypto';
 import { and, asc, eq, gte, inArray, isNull, lte, notInArray, sql } from 'drizzle-orm';
 import {
   addMonths,
-  chargeMonthOf,
   compareDates,
   dateInMonth,
   firstInstallmentDue,
@@ -25,10 +24,10 @@ import { accounts, categories, invoicePayments, invoices, items, occurrences, pa
 import { AppError, badRequest, conflict, notFound } from '../http/errors';
 import { getAccountChecked, getCategoryChecked, getPersonChecked } from './catalog';
 import type { Clock } from './clock';
-import { ensureInvoice, invoiceMonthFor } from './invoice-core';
+import { chargeMonthResolver, ensureInvoice, invoiceMonthFor } from './invoice-core';
 import { payInvoiceTx } from './invoices';
 import { buildRows, getOccurrenceChecked, patchOccurrence, projectedRow, refreshStatus } from './occurrences';
-import { chargeMonthFor, ensureMaterialized, materializeProjection, parseProjectionId, projectionId, projectionsFor } from './projections';
+import { ensureMaterialized, materializeProjection, invoiceOverrides, parseProjectionId, projectionId, projectionsFor, ruleMonthFor, slotFor } from './projections';
 
 /**
  * Itens = regras de lançamento (ADR-0004). Criar um item grava suas ocorrências:
@@ -40,7 +39,7 @@ type AccountRec = typeof accounts.$inferSelect;
 
 interface NewOcc {
   competenceMonth: Month;
-  /** Mês do gasto (no crédito, o da compra; fora dele, igual a `competenceMonth`). */
+  /** Mês do gasto (no crédito, o do período de compras da fatura; fora dele, igual a `competenceMonth`). */
   chargeMonth: Month;
   installmentNumber: number | null;
   expectedCents: number;
@@ -62,8 +61,6 @@ export async function createItemTx(
   opts: {
     /** Uso interno (importação de fatura): a 1ª ocorrência no crédito vai para esta fatura, seja qual for a regra compra × fechamento. */
     invoiceMonth?: Month;
-    /** Uso interno (importação de fatura, "PARC n/m"): mês do gasto da 1ª parcela importada. */
-    firstChargeMonth?: Month;
     /** Entrada de reembolso: a despesa que a gerou. */
     reimbursesItemId?: string;
   } = {},
@@ -88,7 +85,6 @@ export async function createItemTx(
       dueDate: input.dueDate ?? null,
       note: input.note ?? null,
       invoiceMonth: opts.invoiceMonth,
-      firstChargeMonth: opts.firstChargeMonth,
     },
     clock,
   );
@@ -159,7 +155,7 @@ async function createReimbursement(tx: Tx, walletId: string, expense: ItemRec, i
     tx,
     walletId,
     {
-      ...reimbursementInput({ ...input, personId: expense.personId }),
+      ...reimbursementInput({ ...input, personId: expense.personId, chargeMonth: await firstChargeMonth(tx, expense) }),
       categoryId: category.id,
       // Parcelas de meses anteriores seguem a resposta da despesa (histórico). O "Já foi pago?"
       // da única/recorrente não vale: pagar hoje não quer dizer que a pessoa já devolveu.
@@ -169,6 +165,17 @@ async function createReimbursement(tx: Tx, walletId: string, expense: ItemRec, i
     clock,
     { reimbursesItemId: expense.id },
   );
+}
+
+/** No crédito, o mês do gasto da 1ª cobrança da despesa (o do período de compras da fatura dela). */
+async function firstChargeMonth(tx: Tx, expense: ItemRec): Promise<Month | null> {
+  if (expense.method !== 'credit' || !expense.accountId) return null;
+  if (expense.form === 'recurring') {
+    const account = (await tx.query.accounts.findFirst({ where: eq(accounts.id, expense.accountId) })) ?? null;
+    return slotFor(expense, account, expense.startMonth, await invoiceOverrides(tx, expense.accountId)).chargeMonth;
+  }
+  const first = await tx.query.occurrences.findFirst({ where: eq(occurrences.itemId, expense.id), orderBy: [asc(occurrences.installmentNumber)], columns: { chargeMonth: true } });
+  return first?.chargeMonth ?? null;
 }
 
 /** A categoria de entrada "Gasto de terceiros" da carteira (ativa); criada na primeira vez. */
@@ -249,7 +256,7 @@ async function writeOccurrences(
   walletId: string,
   item: ItemRec,
   account: AccountRec | null,
-  input: { amountCents: number; installments: number | null; dueDate: ISODate | null; note: string | null; invoiceMonth?: Month; firstChargeMonth?: Month },
+  input: { amountCents: number; installments: number | null; dueDate: ISODate | null; note: string | null; invoiceMonth?: Month },
   clock: Clock,
   /**
    * Edição estrutural (única/parcelada): diz quais linhas planejadas reaproveitam uma
@@ -259,25 +266,25 @@ async function writeOccurrences(
 ): Promise<void> {
   const credit = item.method === 'credit';
   const planned: NewOcc[] = [];
-  // No crédito, o mês do gasto é o da compra (parcela k: k − 1 meses depois), não o da fatura.
-  const charge = (installment: number | null) => chargeMonthOf({ purchaseDate: item.entryDate, installment, firstChargeMonth: input.firstChargeMonth });
+  // No crédito, o mês do gasto é o do período de compras da fatura (ADR-0005), não o do vencimento.
+  const firstInvoiceMonth = credit && item.form !== 'recurring' ? (input.invoiceMonth ?? (await invoiceMonthFor(tx, account!, item.entryDate))) : null;
+  const charge = firstInvoiceMonth ? await chargeMonthResolver(tx, account!, firstInvoiceMonth) : null;
   if (item.form === 'single') {
     if (credit) {
-      const inv = await ensureInvoice(tx, account!, input.invoiceMonth ?? (await invoiceMonthFor(tx, account!, item.entryDate)));
-      planned.push({ competenceMonth: inv.referenceMonth, chargeMonth: charge(null), installmentNumber: null, expectedCents: input.amountCents, dueDate: inv.dueDate, invoiceId: inv.id });
+      const inv = await ensureInvoice(tx, account!, firstInvoiceMonth!);
+      planned.push({ competenceMonth: inv.referenceMonth, chargeMonth: charge!(inv.referenceMonth), installmentNumber: null, expectedCents: input.amountCents, dueDate: inv.dueDate, invoiceId: inv.id });
     } else {
       const month = monthOf(input.dueDate ?? item.entryDate);
       planned.push({ competenceMonth: month, chargeMonth: month, installmentNumber: null, expectedCents: input.amountCents, dueDate: input.dueDate, invoiceId: null });
     }
   } else if (item.form === 'installment') {
     const parts = splitInstallments(input.amountCents, input.installments!);
-    const firstInvoiceMonth = credit ? (input.invoiceMonth ?? (await invoiceMonthFor(tx, account!, item.entryDate))) : null;
     // Fora do crédito, a data do cadastro é a da 1ª parcela; as demais no mesmo dia dos meses seguintes.
     const dues = credit ? [] : installmentDueDates(item.entryDate, parts.length);
     for (let k = 0; k < parts.length; k++) {
       if (credit) {
         const inv = await ensureInvoice(tx, account!, addMonths(firstInvoiceMonth!, k));
-        planned.push({ competenceMonth: inv.referenceMonth, chargeMonth: charge(k + 1), installmentNumber: k + 1, expectedCents: parts[k]!, dueDate: inv.dueDate, invoiceId: inv.id });
+        planned.push({ competenceMonth: inv.referenceMonth, chargeMonth: charge!(inv.referenceMonth), installmentNumber: k + 1, expectedCents: parts[k]!, dueDate: inv.dueDate, invoiceId: inv.id });
       } else {
         const month = monthOf(dues[k]!);
         planned.push({ competenceMonth: month, chargeMonth: month, installmentNumber: k + 1, expectedCents: parts[k]!, dueDate: dues[k]!, invoiceId: null });
@@ -316,8 +323,9 @@ async function getItemChecked(tx: Tx, walletId: string, id: string): Promise<Ite
 export async function getItemDetail(tx: Tx, walletId: string, id: string, clock: Clock): Promise<ItemDetail> {
   const item = await getItemChecked(tx, walletId, id);
   const occs = await tx.query.occurrences.findMany({
-    // Recorrentes: as cobranças até o mês atual (mês do gasto) e, abaixo, a próxima prevista.
-    where: and(eq(occurrences.itemId, item.id), item.form === 'recurring' ? lte(occurrences.chargeMonth, clock.currentMonth) : undefined),
+    // Recorrentes: as cobranças gravadas até o mês seguinte (mês do gasto; no crédito, a cobrança
+    // deste mês pode contar no seguinte) e, abaixo, a próxima prevista.
+    where: and(eq(occurrences.itemId, item.id), item.form === 'recurring' ? lte(occurrences.chargeMonth, addMonths(clock.currentMonth, 1)) : undefined),
     orderBy: [asc(occurrences.competenceMonth), asc(occurrences.installmentNumber)],
   });
   let rows = await buildRows(tx, occs, clock);
@@ -326,7 +334,8 @@ export async function getItemDetail(tx: Tx, walletId: string, id: string, clock:
   const person = personRec ? { id: personRec.id, name: personRec.name } : null;
   if (item.form === 'recurring') {
     // Mostra também o próximo mês projetado, para a pessoa ver o que vem.
-    const next = (await projectionsFor(tx, walletId, addMonths(clock.currentMonth, 1), clock, 'charge')).filter((p) => p.item.id === item.id);
+    const last = occs.reduce((m, o) => (o.chargeMonth > m ? o.chargeMonth : m), clock.currentMonth);
+    const next = (await projectionsFor(tx, walletId, addMonths(last, 1), clock, 'charge')).filter((p) => p.item.id === item.id);
     rows = rows.concat(next.map((p) => projectedRow(p, rows[0]?.category ?? null, person)));
   }
   // Vínculo do reembolso, nos dois sentidos; item excluído não aparece.
@@ -696,7 +705,7 @@ export async function endRecurringFrom(db: DB, walletId: string, id: string, occ
       if (paid || closed) throw conflict('Há pagamento neste mês ou depois. Desfaça esses pagamentos antes de encerrar.', 'later_months_paid');
     }
 
-    const charge = await chargeMonthFor(tx, item, month);
+    const charge = await ruleMonthFor(tx, item, month);
     if (charge <= item.startMonth) {
       await softDelete(tx, item);
       return null;

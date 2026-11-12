@@ -536,7 +536,7 @@ export function ItemFormModal(props: Props) {
       {credit && accountOptions.length === 0 && !newAccount && <Notice tone="danger">Cadastre um cartão para lançar no crédito: escolha "+ Novo cartão" acima.</Notice>}
       {credit && preview.data && previewDate && (
         <Notice>
-          Conta como gasto de {formatMonthShort(monthOf(previewDate), true)}
+          Conta como gasto de {formatMonthShort(preview.data.chargeMonth, true)}
           {form === 'installment' ? ' (e as outras parcelas nos meses seguintes)' : ''}. Vai para a fatura de {formatMonthShort(preview.data.referenceMonth, true)}, que vence em{' '}
           {formatDateBR(preview.data.dueDate)}.
         </Notice>

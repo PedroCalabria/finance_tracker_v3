@@ -57,11 +57,11 @@ As datas da entrada de reembolso SHALL seguir a despesa, de modo que o reembolso
 | Despesa | Entrada de reembolso |
 | --- | --- |
 | Única fora do crédito | Data do recebimento = data p/ pagamento da despesa ou, sem ela, a data da despesa |
-| Única no crédito | Data do recebimento = data da compra |
+| Única no crédito | Data do recebimento = dia da compra no mês do gasto da despesa |
 | Parcelada fora do crédito | Data do recebimento da 1ª parcela = data da 1ª parcela da despesa |
-| Parcelada no crédito | Data do recebimento da 1ª parcela = data da compra; as demais no mesmo dia dos meses seguintes |
+| Parcelada no crédito | Data do recebimento da 1ª parcela = dia da compra no mês do gasto da 1ª parcela; as demais no mesmo dia dos meses seguintes |
 | Recorrente fora do crédito | Mesmo mês de início e mesmo dia |
-| Recorrente no crédito | Mesmo mês de início; dia do recebimento = dia da cobrança |
+| Recorrente no crédito | Começa no mês do gasto da 1ª cobrança; dia do recebimento = dia da cobrança |
 
 #### Scenario: Parcelada no crédito
 - **WHEN** a pessoa cadastra uma despesa de R$ 300,00 em 3 parcelas no crédito, com data da compra 2026-11-12, num cartão que fecha no dia 10 e vence no dia 17, marcada como gasto de "João"
@@ -69,7 +69,11 @@ As datas da entrada de reembolso SHALL seguir a despesa, de modo que o reembolso
 
 #### Scenario: Recorrente no crédito
 - **WHEN** a pessoa cadastra uma assinatura recorrente no crédito com mês de início 2026-11 e dia da cobrança 28, num cartão que fecha no dia 25 e vence no dia 5, marcada como gasto de "Ana"
-- **THEN** a entrada de reembolso é recorrente, começa em 2026-11 e tem dia do recebimento 28
+- **THEN** a cobrança de 28/11 tem mês do gasto 2026-12 (fatura de jan/2027, compras de 25/11 a 24/12), e a entrada de reembolso é recorrente, começa em 2026-12 e tem dia do recebimento 28
+
+#### Scenario: Única no crédito depois do fechamento
+- **WHEN** a pessoa cadastra uma despesa única no crédito com data da compra 2026-10-30, num cartão que fecha no dia 28 e vence no dia 5, marcada como gasto de "Ana"
+- **THEN** a despesa tem mês do gasto 2026-11 e a entrada de reembolso tem data do recebimento 2026-11-30
 
 #### Scenario: Única fora do crédito com data p/ pagamento
 - **WHEN** a despesa única no boleto tem data 2026-11-03 e data p/ pagamento 2026-11-20

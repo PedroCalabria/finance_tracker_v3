@@ -9,11 +9,12 @@ import { migrationsFolder, runMigrations } from '../src/db/migrate';
 import { TEST_DB } from './helpers';
 
 /**
- * Backfill do mês do gasto (migração 0003, ADR-0004): lançamentos gravados antes dela
- * recebem `charge_month` pela data da compra, pelo número da parcela e, nas recorrentes
- * no crédito, pelo fechamento da fatura.
+ * Backfill do mês do gasto (ADR-0004, ADR-0005). A migração 0003 preencheu `charge_month`
+ * pela data da compra, pelo número da parcela e, nas recorrentes no crédito, pelo
+ * fechamento da fatura. A 0006 recalcula o crédito pela fatura: o mês em que cai a maior
+ * parte do período de compras dela.
  */
-describe('migração 0003: backfill do mês do gasto', () => {
+describe('migrações 0003 e 0006: backfill do mês do gasto', () => {
   const { db, pool } = createDb(TEST_DB);
   const tmp = mkdtempSync(path.join(tmpdir(), 'ff-migrations-'));
   afterAll(async () => {
@@ -23,14 +24,17 @@ describe('migração 0003: backfill do mês do gasto', () => {
 
   it('preenche o mês do gasto dos lançamentos existentes', async () => {
     await pool.query('drop schema if exists public cascade; drop schema if exists drizzle cascade; create schema public;');
-    // Até a 0002: cópia das migrações com o journal cortado antes da 0003.
+    // Cópia das migrações com o journal cortado antes de `tag`.
     cpSync(migrationsFolder(), tmp, { recursive: true });
     const journalPath = path.join(tmp, 'meta', '_journal.json');
     const journal = JSON.parse(readFileSync(journalPath, 'utf8'));
-    const upTo = journal.entries.findIndex((e: { tag: string }) => e.tag === '0003_mes_do_gasto');
-    expect(upTo).toBeGreaterThan(0);
-    writeFileSync(journalPath, JSON.stringify({ ...journal, entries: journal.entries.slice(0, upTo) }));
-    await migrate(drizzle(pool), { migrationsFolder: tmp });
+    const migrateBefore = async (tag: string) => {
+      const upTo = journal.entries.findIndex((e: { tag: string }) => e.tag === tag);
+      expect(upTo).toBeGreaterThan(0);
+      writeFileSync(journalPath, JSON.stringify({ ...journal, entries: journal.entries.slice(0, upTo) }));
+      await migrate(drizzle(pool), { migrationsFolder: tmp });
+    };
+    await migrateBefore('0003_mes_do_gasto');
 
     const one = async (q: string, params: unknown[] = []) => (await pool.query(q, params)).rows[0];
     const wallet = (await one(`insert into wallets (name, kind) values ('W', 'personal') returning id`)).id;
@@ -76,15 +80,35 @@ describe('migração 0003: backfill do mês do gasto', () => {
     // Fora do crédito: o próprio mês. Ajuste da fatura: o mês da fatura.
     const boleto = await occ(await item('single', 'boleto', '2026-10-03'), '2026-10', null, null);
     const adjustment = await occ(await item('single', 'credit', '2026-11-25', 'system_kind', ['invoice_adjustment']), '2026-12', null, inv['2026-12']!);
+    // Cartão que fecha dia 28 e vence dia 5, só com a fatura de dez gravada: compra de 30/10.
+    const xp = (await one(`insert into accounts (wallet_id, name, bank, kind, closing_day, due_day) values ($1, 'XP', 'XP', 'credit_card', 28, 5) returning id`, [wallet])).id;
+    const xpDec = (await one(`insert into invoices (wallet_id, account_id, reference_month, closing_date, due_date) values ($1, $2, '2026-12', '2026-11-28', '2026-12-05') returning id`, [wallet, xp])).id;
+    const xpItem = (
+      await one(`insert into items (wallet_id, type, form, description, method, account_id, entry_date, start_month) values ($1, 'expense', 'single', 'Uber', 'credit', $2, '2026-10-30', '2026-10') returning id`, [wallet, xp])
+    ).id;
+    const uber = await occ(xpItem, '2026-12', null, xpDec);
 
-    await runMigrations(db);
     const charge = async (id: string) => (await one('select charge_month from occurrences where id = $1', [id])).charge_month;
-    expect(await charge(single)).toBe('2026-10');
+
+    // 0003: o mês da compra.
+    await migrateBefore('0006_mes_do_gasto_pela_fatura');
+    expect([await charge(single), await charge(uber)]).toEqual(['2026-10', '2026-10']);
     expect(await Promise.all(parcels.map(charge))).toEqual(['2026-11', '2026-12', '2027-01']);
     expect([await charge(imported), await charge(lastParcel)]).toEqual(['2026-10', '2026-10']);
     expect([await charge(rec28), await charge(rec10)]).toEqual(['2026-11', '2026-11']);
     expect([await charge(boleto), await charge(adjustment)]).toEqual(['2026-10', '2026-12']);
     const nulls = await one('select count(*)::int as n from occurrences where charge_month is null');
     expect(nulls.n).toBe(0);
+
+    // 0006: o mês do período de compras da fatura.
+    await runMigrations(db);
+    // Fatura de dez da Nu (compras de 25/10 a 24/11) → nov; da XP (28/10 a 27/11, fatura de nov padrão) → nov.
+    expect([await charge(single), await charge(uber)]).toEqual(['2026-11', '2026-11']);
+    expect(await Promise.all(parcels.map(charge))).toEqual(['2026-11', '2026-12', '2027-01']);
+    // Fatura de nov sem a de out gravada: compras de 25/09 a 24/10 → out.
+    expect([await charge(imported), await charge(lastParcel)]).toEqual(['2026-10', '2026-10']);
+    // A cobrança de 28/11 está na fatura de jan (compras de 25/11 a 24/12) → dez.
+    expect([await charge(rec28), await charge(rec10)]).toEqual(['2026-12', '2026-11']);
+    expect([await charge(boleto), await charge(adjustment)]).toEqual(['2026-10', '2026-12']);
   });
 });

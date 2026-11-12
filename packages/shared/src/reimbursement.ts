@@ -1,4 +1,4 @@
-import type { ISODate, Month } from './dates';
+import { dateInMonth, type ISODate, type Month } from './dates';
 import type { ItemForm, Method } from './domain';
 import type { ItemCreateInput } from './schemas';
 
@@ -7,8 +7,8 @@ import type { ItemCreateInput } from './schemas';
  * servidor completa a categoria ("Gasto de terceiros") e grava o vínculo.
  *
  * As datas caem no mesmo mês do gasto (`charge_month`), para o balanço do mês zerar
- * para aquele gasto: fora do crédito, as datas da despesa; no crédito, a data da
- * compra (e o dia da cobrança, na recorrente), não o vencimento da fatura.
+ * para aquele gasto: fora do crédito, as datas da despesa; no crédito, o dia da compra
+ * (ou da cobrança, na recorrente) no mês do gasto da 1ª cobrança, não o vencimento da fatura.
  */
 
 /** O que importa da despesa recém-cadastrada (o mesmo contrato do cadastro). */
@@ -25,12 +25,16 @@ export interface ReimbursedExpense {
   dueDate?: ISODate | null;
   startMonth?: Month | null;
   day?: number | null;
+  /** No crédito: mês do gasto da 1ª cobrança (o da fatura dela, ADR-0005). Sem ele, o mês da compra. */
+  chargeMonth?: Month | null;
 }
 
 export type ReimbursementInput = Omit<ItemCreateInput, 'categoryId' | 'alreadyPaid' | 'pastInstallmentsPaid' | 'createReimbursement' | 'note'>;
 
 export function reimbursementInput(expense: ReimbursedExpense): ReimbursementInput {
   const credit = expense.method === 'credit';
+  // No crédito, o mesmo dia no mês do gasto (compra de 30/10 que conta em novembro: 30/11).
+  const inChargeMonth = (date: ISODate) => (credit && expense.chargeMonth ? dateInMonth(expense.chargeMonth, Number(date.slice(8, 10))) : date);
   const base = {
     type: 'income' as const,
     form: expense.form,
@@ -42,11 +46,12 @@ export function reimbursementInput(expense: ReimbursedExpense): ReimbursementInp
   };
   if (expense.form === 'recurring') {
     // No crédito, `day` é o dia da cobrança; fora dele, o do pagamento (obrigatório com reembolso).
-    return { ...base, variableAmount: !!expense.variableAmount, startMonth: expense.startMonth!, day: expense.day! };
+    const startMonth = credit && expense.chargeMonth ? expense.chargeMonth : expense.startMonth!;
+    return { ...base, variableAmount: !!expense.variableAmount, startMonth, day: expense.day! };
   }
-  if (expense.form === 'installment') return { ...base, installments: expense.installments!, date: expense.date! };
+  if (expense.form === 'installment') return { ...base, installments: expense.installments!, date: inChargeMonth(expense.date!) };
   // Única: nas entradas, a própria data é a do recebimento (e vai também como `dueDate`).
-  // No crédito, a data da compra; fora dele, a data p/ pagamento ou, sem ela, a data.
-  const receipt = credit ? expense.date! : (expense.dueDate ?? expense.date!);
+  // No crédito, o dia da compra no mês do gasto; fora dele, a data p/ pagamento ou, sem ela, a data.
+  const receipt = credit ? inChargeMonth(expense.date!) : (expense.dueDate ?? expense.date!);
   return { ...base, date: receipt, dueDate: receipt };
 }

@@ -62,6 +62,9 @@ Atualizado em 09/11/2026. Fase 1 da especificação implementada; o que falta pa
 ## Ajustes de 09/11/2026
 - **Gastos no mês da compra:** compras no crédito passam a aparecer e contar no mês em que foram feitas (mês do gasto, `charge_month`), não no mês da fatura; a fatura continua pelo vencimento e o bloco mostra o período das compras. Recorrentes no crédito são gravadas quando a cobrança chega. Cards: gastos = consumo do mês; "Na conta até agora" = caixa (inclui faturas pagas). Reembolso de terceiros no mesmo mês do gasto. Backfill dos lançamentos existentes na migração `0003` (ADR-0004, ADR-0005, ADR-0009).
 
+## Ajustes de 12/11/2026
+- **Mês do gasto pela fatura:** no crédito, o mês do gasto deixa de ser o mês da compra e passa a ser o do período de compras da fatura (o mês com a maior parte dele). Num cartão que fecha dia 28, a compra de 30/10 conta como novembro, junto com o resto da fatura de dez. Mover de fatura e ajustar o fechamento recalculam o mês; o reembolso de terceiros acompanha. Backfill na migração `0006` (ADR-0004, ADR-0005, ADR-0009).
+
 ## Observações para as próximas etapas
 - **Carteira familiar:** criar `POST /wallets`, convites (`/wallets/:id/invites`, `/invites/:token/accept`) e um seletor de carteira na interface; as rotas financeiras já são por carteira. O resumo diário já percorre todas as carteiras da pessoa.
 - **Importação (ADR-0010):** banco novo = leitor novo em `packages/shared/src/imports/readers/` + entrada em `READERS` + fixture anonimizada (`npx tsx scripts/anonymize-import-fixture.ts <pdf> <saida.json>`, que só sabe anonimizar BB; para outro banco, adaptar). PDFs reais ficam em `docs/bank-docs-examples/` (fora do git e da imagem). Pendente: CSV, outros bancos, OFX de cartão, desfazer um lote, tela de histórico das importações e mostrar a numeração original das parcelas importadas.

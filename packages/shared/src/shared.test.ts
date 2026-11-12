@@ -9,6 +9,7 @@ import {
   easterSunday,
   formatBRL,
   formatMonthLong,
+  invoiceChargeMonth,
   invoiceMonthForPurchase,
   isBusinessDay,
   onOrBeforeBusinessDay,
@@ -106,6 +107,33 @@ describe('faturas', () => {
   it('respeita datas ajustadas no mês', () => {
     const overrides = new Map([['2026-12', { closingDate: '2026-11-28', dueDate: '2026-12-08' }]]);
     expect(invoiceMonthForPurchase('2026-11-27', 1, 8, overrides)).toBe('2026-12');
+  });
+});
+
+describe('mês do gasto da fatura', () => {
+  it('fecha no fim do mês: as compras depois do fechamento já contam no mês seguinte', () => {
+    // Fecha 28, vence 5: a fatura de dez tem as compras de 28/10 a 27/11 → novembro.
+    expect(invoiceMonthForPurchase('2026-10-30', 28, 5)).toBe('2026-12');
+    expect(invoiceChargeMonth('2026-12', 28, 5)).toBe('2026-11');
+    // Fecha 25, vence 1: a fatura de dez tem as compras de 25/10 a 24/11 → novembro.
+    expect(invoiceChargeMonth('2026-12', 25, 1)).toBe('2026-11');
+  });
+  it('fecha no começo do mês: as compras contam no mês anterior ao do fechamento', () => {
+    // Fecha 3, vence 10: a fatura de nov tem as compras de 03/10 a 02/11 → outubro.
+    expect(invoiceChargeMonth('2026-11', 3, 10)).toBe('2026-10');
+  });
+  it('no meio do mês vale onde cai a maior parte do período', () => {
+    // 16/10 a 15/11: 16 dias em outubro. 17/10 a 16/11: 16 dias em novembro.
+    expect(invoiceChargeMonth('2026-11', 16, 23)).toBe('2026-10');
+    expect(invoiceChargeMonth('2026-11', 17, 24)).toBe('2026-11');
+  });
+  it('faturas seguidas ficam em meses seguidos, inclusive na virada do ano', () => {
+    expect(['2026-12', '2027-01', '2027-02'].map((m) => invoiceChargeMonth(m, 28, 5))).toEqual(['2026-11', '2026-12', '2027-01']);
+  });
+  it('respeita datas ajustadas da fatura e da anterior', () => {
+    // A fatura de dez fechou antes (03/11): as compras de 28/10 a 02/11 ficam em outubro.
+    const overrides = new Map([['2026-12', { closingDate: '2026-11-03', dueDate: '2026-12-05' }]]);
+    expect(invoiceChargeMonth('2026-12', 28, 5, overrides)).toBe('2026-10');
   });
 });
 

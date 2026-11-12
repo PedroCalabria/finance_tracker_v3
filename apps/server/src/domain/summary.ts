@@ -10,7 +10,7 @@ import { listOccurrences } from './occurrences';
 
 /**
  * Cards do mês (ADR-0004), calculados no servidor para a regra ficar num lugar só.
- * Gastos = CONSUMO pelo mês do gasto (no crédito, o mês da compra):
+ * Gastos = CONSUMO pelo mês do gasto (no crédito, o do período de compras da fatura):
  * - fora do crédito: pagamentos em "pago", restante em "a pagar"; no mês atual, os atrasados de
  *   meses anteriores somam em "a pagar" e em "em atraso";
  * - no crédito: a compra inteira em "pago" se a fatura dela está paga ou encerrada; senão, "a pagar".

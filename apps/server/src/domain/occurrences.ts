@@ -297,7 +297,7 @@ export async function patchOccurrence(
   if (input.note !== undefined) patch.note = input.note || null;
   if (input.competenceMonth !== undefined) {
     patch.competenceMonth = input.competenceMonth;
-    // Fora do crédito, o mês do gasto acompanha o mês da ocorrência (no crédito, mover de fatura não o muda).
+    // Fora do crédito, o mês do gasto acompanha o mês da ocorrência (no crédito, vem da fatura: `moveToInvoice`).
     if (item.method !== 'credit') patch.chargeMonth = input.competenceMonth;
   }
   await tx

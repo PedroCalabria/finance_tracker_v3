@@ -73,7 +73,7 @@ export interface OccurrenceRow {
   account: { id: string; name: string; bank: string; kind: AccountKind } | null;
   /** Mês da ocorrência; no crédito, o mês da fatura. */
   competenceMonth: Month;
-  /** Mês do gasto: no crédito, o mês da compra ou da cobrança; fora dele, igual a `competenceMonth`. */
+  /** Mês do gasto: no crédito, o do período de compras da fatura (ADR-0005); fora dele, igual a `competenceMonth`. */
   chargeMonth: Month;
   installmentNumber: number | null;
   installmentsTotal: number | null;
@@ -173,6 +173,8 @@ export interface InvoicePreview {
   referenceMonth: Month;
   closingDate: ISODate;
   dueDate: ISODate;
+  /** Mês do gasto das compras desta fatura (ADR-0005). */
+  chargeMonth: Month;
 }
 
 export interface NotificationSettings {

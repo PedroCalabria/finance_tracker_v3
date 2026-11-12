@@ -1,5 +1,5 @@
 import { and, desc, eq, isNull, sql } from 'drizzle-orm';
-import { addMonths, dateInMonth, defaultInvoiceDates, invoiceMonthForPurchase, type ISODate, type Month } from '@ff/shared';
+import { addMonths, dateInMonth, defaultInvoiceDates, invoiceChargeMonth, invoiceMonthForPurchase, type ISODate, type Month } from '@ff/shared';
 import type { Tx } from '../db/client';
 import { accounts, invoices, items, occurrences, payments } from '../db/schema';
 import { badRequest, notFound } from '../http/errors';
@@ -11,13 +11,19 @@ import { ensureInvoice } from './invoice-core';
  * (preguiçosamente, na primeira leitura do mês), mesmo que a fatura delas seja de um
  * mês futuro; cobranças futuras são PROJEÇÕES calculadas da regra, com id
  * "p_<itemId>_<mês da fatura/competência>", gravadas quando alguém mexe nelas.
+ *
+ * No crédito há três meses por cobrança: o da regra (dia `entryDate` em cada mês), o do
+ * gasto (período de compras da fatura, ADR-0005) e o da fatura. Uma cobrança é gravada
+ * quando o mês da regra ou o do gasto chega.
  */
 
 type ItemRec = typeof items.$inferSelect;
 type AccountRec = typeof accounts.$inferSelect;
 
 export interface Slot {
-  /** Mês em que a cobrança acontece (dia `entryDate` no crédito). */
+  /** Mês da cobrança na regra (dia `entryDate` no crédito); entre `startMonth` e `endMonth`. */
+  ruleMonth: Month;
+  /** Mês do gasto: fora do crédito, o da regra; no crédito, o do período de compras da fatura. */
   chargeMonth: Month;
   competenceMonth: Month;
   dueDate: ISODate | null;
@@ -30,16 +36,20 @@ export function parseProjectionId(id: string): { itemId: string; month: Month } 
   return m ? { itemId: m[1]!, month: m[2]! } : null;
 }
 
-/** Onde cai a cobrança de um mês de uma recorrente. */
-export function slotFor(item: ItemRec, account: AccountRec | null, chargeMonth: Month, overrides: Map<Month, { closingDate: ISODate; dueDate: ISODate }>): Slot {
+/** Onde cai a cobrança de um mês (da regra) de uma recorrente. */
+export function slotFor(item: ItemRec, account: AccountRec | null, ruleMonth: Month, overrides: Map<Month, { closingDate: ISODate; dueDate: ISODate }>): Slot {
   if (item.method === 'credit' && account?.kind === 'credit_card') {
-    const chargeDate = dateInMonth(chargeMonth, Number(item.entryDate.slice(8, 10)));
+    const chargeDate = dateInMonth(ruleMonth, Number(item.entryDate.slice(8, 10)));
     const inv = invoiceMonthForPurchase(chargeDate, account.closingDay!, account.dueDay!, overrides);
     const d = overrides.get(inv) ?? defaultInvoiceDates(inv, account.closingDay!, account.dueDay!);
-    return { chargeMonth, competenceMonth: inv, dueDate: d.dueDate };
+    const chargeMonth = invoiceChargeMonth(inv, account.closingDay!, account.dueDay!, overrides);
+    return { ruleMonth, chargeMonth, competenceMonth: inv, dueDate: d.dueDate };
   }
-  return { chargeMonth, competenceMonth: chargeMonth, dueDate: item.dueDay ? dateInMonth(chargeMonth, item.dueDay) : null };
+  return { ruleMonth, chargeMonth: ruleMonth, competenceMonth: ruleMonth, dueDate: item.dueDay ? dateInMonth(ruleMonth, item.dueDay) : null };
 }
+
+/** A cobrança já chegou (mês da regra ou do gasto até o mês atual): é gravada, não projetada. */
+const isDue = (slot: Slot, clock: Clock) => slot.ruleMonth <= clock.currentMonth || slot.chargeMonth <= clock.currentMonth;
 
 export async function invoiceOverrides(tx: Tx, accountId: string | null) {
   if (!accountId) return new Map<Month, { closingDate: ISODate; dueDate: ISODate }>();
@@ -65,8 +75,8 @@ async function activeRecurring(tx: Tx, walletId: string): Promise<ItemRec[]> {
   return tx.query.items.findMany({ where: and(eq(items.walletId, walletId), eq(items.form, 'recurring'), isNull(items.deletedAt)) });
 }
 
-/** Cobranças (meses) de uma recorrente entre dois meses de cobrança, respeitando início e fim. */
-function chargeMonths(item: ItemRec, from: Month, to: Month): Month[] {
+/** Meses da regra de uma recorrente entre dois meses, respeitando início e fim. */
+function ruleMonths(item: ItemRec, from: Month, to: Month): Month[] {
   const out: Month[] = [];
   let m = from < item.startMonth ? item.startMonth : from;
   const end = item.endMonth && item.endMonth < to ? item.endMonth : to;
@@ -78,11 +88,11 @@ function chargeMonths(item: ItemRec, from: Month, to: Month): Month[] {
 }
 
 /**
- * Mês de cobrança que gerou a ocorrência de competência `month`. Fora do crédito
+ * Mês da regra que gerou a ocorrência de competência `month`. Fora do crédito
  * são o mesmo mês; no crédito, a cobrança pode cair até 2 meses antes da fatura.
  * Se nenhuma cobrança da regra cai nessa fatura (ocorrência movida à mão), vale o próprio mês.
  */
-export async function chargeMonthFor(tx: Tx, item: ItemRec, month: Month): Promise<Month> {
+export async function ruleMonthFor(tx: Tx, item: ItemRec, month: Month): Promise<Month> {
   if (item.method !== 'credit' || !item.accountId) return month;
   const account = (await tx.query.accounts.findFirst({ where: eq(accounts.id, item.accountId) })) ?? null;
   const overrides = await invoiceOverrides(tx, item.accountId);
@@ -94,20 +104,22 @@ export async function chargeMonthFor(tx: Tx, item: ItemRec, month: Month): Promi
 }
 
 /**
- * Grava as ocorrências de recorrentes cuja cobrança já chegou (mês do gasto ≤ mês atual),
- * inclusive no crédito com fatura futura. Idempotente: roda em toda leitura de mês e no job de avisos.
+ * Grava as ocorrências de recorrentes cuja cobrança já chegou (`isDue`), inclusive no
+ * crédito com fatura futura. Idempotente: roda em toda leitura de mês e no job de avisos.
  */
 export async function ensureMaterialized(tx: Tx, walletId: string, clock: Clock): Promise<void> {
   const recs = await activeRecurring(tx, walletId);
   for (const item of recs) {
-    if (item.startMonth > clock.currentMonth) continue;
+    // No crédito, a cobrança do mês seguinte pode ter o mês do gasto no mês atual.
+    const until = addMonths(clock.currentMonth, 1);
+    if (item.startMonth > until) continue;
     const existing = await tx.query.occurrences.findMany({ where: eq(occurrences.itemId, item.id), columns: { competenceMonth: true } });
     const have = new Set(existing.map((e) => e.competenceMonth));
     const account = item.accountId ? ((await tx.query.accounts.findFirst({ where: eq(accounts.id, item.accountId) })) ?? null) : null;
     const overrides = await invoiceOverrides(tx, item.method === 'credit' ? item.accountId : null);
-    for (const m of chargeMonths(item, item.startMonth, clock.currentMonth)) {
+    for (const m of ruleMonths(item, item.startMonth, until)) {
       const slot = slotFor(item, account, m, overrides);
-      if (have.has(slot.competenceMonth)) continue;
+      if (!isDue(slot, clock) || have.has(slot.competenceMonth)) continue;
       await insertSlot(tx, item, account, slot);
       have.add(slot.competenceMonth);
     }
@@ -148,15 +160,15 @@ export async function projectionsFor(tx: Tx, walletId: string, month: Month, clo
   if (month <= clock.currentMonth) return [];
   const out: ProjectedSlot[] = [];
   for (const item of await activeRecurring(tx, walletId)) {
-    // No crédito a competência pode ser até 2 meses depois da cobrança.
-    const months = by === 'charge' ? chargeMonths(item, month, month) : chargeMonths(item, addMonths(month, -2), month);
+    // No crédito, o mês do gasto fica a até um mês do da regra, e a fatura até 2 meses depois da regra.
+    const months = by === 'charge' ? ruleMonths(item, addMonths(month, -1), addMonths(month, 1)) : ruleMonths(item, addMonths(month, -2), month);
     if (months.length === 0) continue;
     const account = item.accountId ? ((await tx.query.accounts.findFirst({ where: eq(accounts.id, item.accountId) })) ?? null) : null;
     const overrides = await invoiceOverrides(tx, item.method === 'credit' ? item.accountId : null);
     for (const m of months) {
       const slot = slotFor(item, account, m, overrides);
-      if (by === 'competence' && slot.competenceMonth !== month) continue;
-      if (slot.chargeMonth <= clock.currentMonth) continue; // já gravada
+      if ((by === 'competence' ? slot.competenceMonth : slot.chargeMonth) !== month) continue;
+      if (isDue(slot, clock)) continue; // já gravada
       const exists = await tx.query.occurrences.findFirst({
         where: and(eq(occurrences.itemId, item.id), eq(occurrences.competenceMonth, slot.competenceMonth), isNull(occurrences.installmentNumber)),
         columns: { id: true },

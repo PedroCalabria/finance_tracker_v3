@@ -108,7 +108,7 @@ function BalanceLine({ label, cents, sign, info }: { label: string; cents: numbe
 /**
  * Os três cards do mês (design system: SummaryCard). O previsto do mês fica em destaque
  * e o realizado na linha de baixo (ADR-0004). Gastos = consumo pelo mês do gasto (no
- * crédito, o mês da compra); "Na conta até agora" = caixa (recebido − o que saiu da conta,
+ * crédito, o do período de compras da fatura); "Na conta até agora" = caixa (recebido − o que saiu da conta,
  * inclusive faturas pagas). Só o Balanço é preenchido.
  */
 export function SummaryCards({ summary, onSeeType }: { summary: Summary | undefined; onSeeType: (t: ItemType) => void }) {

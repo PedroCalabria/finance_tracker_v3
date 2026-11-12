@@ -188,12 +188,20 @@ describe('gasto de outra pessoa: entrada de reembolso', () => {
     expect(((await c.get(c.w('/categories'))).json() as Row[]).filter((x) => x.name === 'Gasto de terceiros')).toHaveLength(1);
   });
 
-  it('única no crédito: recebe na data da compra, no mesmo mês do gasto, sem conta', async () => {
+  it('única no crédito: recebe no dia da compra, no mesmo mês do gasto, sem conta', async () => {
     const expense = await create({ method: 'credit', accountId: ouro, description: 'Fone da Maria', amountCents: 15000, date: '2026-11-12', personId: maria, createReimbursement: true });
     expect(expense.occurrences[0]).toMatchObject({ chargeMonth: '2026-11', invoice: expect.objectContaining({ referenceMonth: '2026-12' }) });
     const income = (await reimbursementOf(expense.id))!;
     expect(income).toMatchObject({ method: 'pix', accountId: null });
     expect(income.occurrences[0]).toMatchObject({ dueDate: '2026-11-12', competenceMonth: '2026-11', chargeMonth: '2026-11' });
+  });
+
+  it('única no crédito depois do fechamento: o reembolso vai para o mês do gasto', async () => {
+    // Fecha 25, vence 5: a compra de 27/11 fica na fatura de jan (compras de 25/11 a 24/12) → dezembro.
+    const expense = await create({ method: 'credit', accountId: nu, description: 'Jantar da Maria', amountCents: 8000, date: '2026-11-27', personId: maria, createReimbursement: true });
+    expect(expense.occurrences[0]).toMatchObject({ chargeMonth: '2026-12', invoice: expect.objectContaining({ referenceMonth: '2027-01' }) });
+    const income = (await reimbursementOf(expense.id))!;
+    expect(income.occurrences[0]).toMatchObject({ dueDate: '2026-12-27', chargeMonth: '2026-12' });
   });
 
   it('parcelada no crédito: parcelas nos meses do gasto (data da compra)', async () => {
@@ -234,13 +242,14 @@ describe('gasto de outra pessoa: entrada de reembolso', () => {
     expect(find(await occ('2026-11', 'income'), 'Streaming').dueDate).toBe('2026-11-10');
   });
 
-  it('recorrente no crédito: mesmo mês de início, no dia da cobrança', async () => {
+  it('recorrente no crédito: começa no mês do gasto da 1ª cobrança, no dia da cobrança', async () => {
     const expense = await create({ form: 'recurring', method: 'credit', accountId: nu, description: 'Assinatura da Maria', amountCents: 2990, startMonth: '2026-11', day: 28, personId: maria, createReimbursement: true });
     const income = (await reimbursementOf(expense.id))!;
-    expect(income).toMatchObject({ form: 'recurring', startMonth: '2026-11', dueDay: 28, accountId: null });
-    // A cobrança de 28/11 (fatura de jan) e o reembolso ficam os dois em novembro.
-    expect(find(await occ('2026-11'), 'Assinatura da Maria')).toMatchObject({ projected: false, invoice: expect.objectContaining({ referenceMonth: '2027-01' }) });
-    expect(find(await occ('2026-11', 'income'), 'Assinatura da Maria').dueDate).toBe('2026-11-28');
+    expect(income).toMatchObject({ form: 'recurring', startMonth: '2026-12', dueDay: 28, accountId: null });
+    // A cobrança de 28/11 (fatura de jan, compras de 25/11 a 24/12) e o reembolso ficam os dois em dezembro.
+    expect(find(await occ('2026-12'), 'Assinatura da Maria')).toMatchObject({ projected: false, invoice: expect.objectContaining({ referenceMonth: '2027-01' }) });
+    expect(find(await occ('2026-12', 'income'), 'Assinatura da Maria').dueDate).toBe('2026-12-28');
+    expect(find(await occ('2026-11', 'income'), 'Assinatura da Maria')).toBeUndefined();
   });
 
   it('validação: só despesa, com pessoa', async () => {

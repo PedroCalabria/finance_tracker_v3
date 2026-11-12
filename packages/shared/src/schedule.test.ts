@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { chargeMonthOf, firstInstallmentDue, installmentDueDates, itemCreateInput, itemEditInput, itemEndInput, recurringRule } from './index';
+import { firstInstallmentDue, installmentDueDates, itemCreateInput, itemEditInput, itemEndInput, recurringRule } from './index';
 
 const base = { description: 'Academia', amountCents: 10000 };
 const errorsOf = (r: { success: boolean; error?: { issues: Array<{ path: (string | number)[]; message: string }> } }) =>
@@ -70,19 +70,5 @@ describe('contrato de datas do lançamento', () => {
   it('"este e os próximos" recebe a ocorrência escolhida', () => {
     expect(itemEndInput.safeParse({ occurrenceId: 'p_00000000-0000-4000-8000-000000000000_2027-01' }).success).toBe(true);
     expect(itemEndInput.safeParse({ lastMonth: '2026-11' }).success).toBe(false);
-  });
-});
-
-describe('mês do gasto no crédito', () => {
-  it('única: o mês da compra, seja qual for a fatura', () => {
-    expect(chargeMonthOf({ purchaseDate: '2026-11-10' })).toBe('2026-11');
-    expect(chargeMonthOf({ purchaseDate: '2026-11-27', installment: null })).toBe('2026-11');
-  });
-  it('parcela k: k − 1 meses depois, inclusive na virada do ano', () => {
-    expect([1, 2, 3].map((k) => chargeMonthOf({ purchaseDate: '2026-11-10', installment: k }))).toEqual(['2026-11', '2026-12', '2027-01']);
-  });
-  it('parcelas antigas importadas da fatura ("PARC 05/10" de julho): a partir do mês da 1ª importada', () => {
-    const first = '2026-11'; // julho + (5 − 1)
-    expect([1, 2, 6].map((k) => chargeMonthOf({ purchaseDate: '2026-07-15', installment: k, firstChargeMonth: first }))).toEqual(['2026-11', '2026-12', '2027-04']);
   });
 });

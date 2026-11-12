@@ -43,6 +43,13 @@
       "when": 1794334619905,
       "tag": "0005_caixinhas",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1794479276293,
+      "tag": "0006_mes_do_gasto_pela_fatura",
+      "breakpoints": true
     }
   ]
 }
